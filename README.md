@@ -1,3 +1,15 @@
+This is a fork of Jason Prado's [bsky-image-bot](https://github.com/jasonprado/bsky-image-bot).
+The end result of this bot is available [here](https://bsky.app/profile/TWWbot.bsky.social).
+It is also a ground-up reimagining of [the original TWWbot for twitter](https://github.com/MayaTelLabs/TWWbot-Python), now renamed TWWbot-Python. It shares 0 lines of code with the original, thanks to an excellent codebase from Jason Prado. They are obviously not cross-compatible in any way.
+
+This fork differs significantly in how it functions, including stripping out the image resizing and date code, while conforming to very strict image name structuring and adding automatic resolution detection.
+
+The instructions below **will not work**. You should probably not fork this. As always: no refunds.
+
+**In accordance with the original repository, this is licensed under the traditional MIT license instead of the modified MayaTel Software License usually seen in my repositories.**
+
+ORIGINAL DESCRIPTION:
+
 # bsky-image-bot
 
 This is a simple bot that posts an image to Bluesky on a cron job using GitHub Actions.
