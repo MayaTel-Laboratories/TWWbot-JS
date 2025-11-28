@@ -10,12 +10,12 @@ interface ImageDetails {
 }
 function parseImageName(imageName: string): ImageDetails | null {
   const matchResult = imageName.match(/^TWW_(\d)x(\d{2})_(\w+)__(\d+)\.jpeg$/);
-  if (match) {
+  if (matchResult) {
     return {
-      season: match[1],
-      episodeNumber: match[2],
-      episodeTitle: match[3],
-      frameNumber: match[4],
+      season: matchResult[1],
+      episodeNumber: matchResult[2],
+      episodeTitle: matchResult[3],
+      frameNumber: matchResult[4],
     };
   }
   return null
