@@ -1,27 +1,21 @@
-import { postImage } from './clients/at';
-import { getNextImage } from './images';
-import * as dotenv from 'dotenv';
-dotenv.config();
 interface ImageDetails {
-  season: string;        // Y
-  episodeNumber: string; // ZZ
-  episodeTitle: string;  // Q
-  frameNumber: string;   // F
+  season: string
+  episodeNumber: string
+  episodeTitle: string
+  frameNumber: string
 }
 function parseImageName(imageName: string): ImageDetails | null {
   const match = imageName.match(/^TWW_(\d)x(\d{2})_(.)__(\d+)\.jpeg$/);
-
   if (match) {
     return {
-      season: match,
-      episodeNumber: match,
-      episodeTitle: match,
-      frameNumber: match,
+      season: match[1]
+      episodeNumber: match[2]
+      episodeTitle: match[3]
+      frameNumber: match[4]
     };
   }
-  return null;
+  return null
 }
-
 function TextFromImageDetails(details: ImageDetails): string {
   if (!details) {
     return "A West Wing Image";
@@ -33,7 +27,6 @@ async function main() {
   const nextImage = await getNextImage({ lastImageName });
   console.log(nextImage.imageName);
   const imageDetails = parseImageName(nextImage.imageName);
-
   if (imageDetails) {
     const postText = TextFromImageDetails(imageDetails);
     await postImage({
