@@ -24,7 +24,9 @@ function TextFromImageDetails(details: ImageDetails): string {
   if (!details) {
     return "A West Wing Image";
   }
-  return `The West Wing - ${details.season}x${details.episodeNumber} - ${details.episodeTitle} - Frame ${details.frameNumber}`;
+  const seasonWithoutZeros = parseInt(details.season, 10).toString();
+  const episodeWithoutZeros = parseInt(details.episodeNumber, 10).toString();
+  return `The West Wing - ${seasonWithoutZeros}x${episodeWithoutZeros} - ${details.episodeTitle} - Frame ${details.frameNumber}`;
 }
 async function main() {
   const { LAST_IMAGE_NAME: lastImageName } = process.env;
