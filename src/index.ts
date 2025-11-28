@@ -9,7 +9,7 @@ interface ImageDetails {
   frameNumber: string
 }
 function parseImageName(imageName: string): ImageDetails | null {
-  const match = imageName.match(/^TWW_(\d)x(\d{2})_(.)__(\d+)\.jpeg$/);
+  const matchResult = imageName.match(/^TWW_(\d)x(\d{2})_(\w+)__(\d+)\.jpeg$/);
   if (match) {
     return {
       season: match[1],
