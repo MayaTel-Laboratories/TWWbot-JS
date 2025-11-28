@@ -1,3 +1,7 @@
+import { postImage } from './clients/at';
+import { getNextImage } from './images';
+import * as dotenv from 'dotenv';
+dotenv.config();
 interface ImageDetails {
   season: string
   episodeNumber: string
@@ -8,10 +12,10 @@ function parseImageName(imageName: string): ImageDetails | null {
   const match = imageName.match(/^TWW_(\d)x(\d{2})_(.)__(\d+)\.jpeg$/);
   if (match) {
     return {
-      season: match[1]
-      episodeNumber: match[2]
-      episodeTitle: match[3]
-      frameNumber: match[4]
+      season: match[1],
+      episodeNumber: match[2],
+      episodeTitle: match[3],
+      frameNumber: match[4],
     };
   }
   return null
