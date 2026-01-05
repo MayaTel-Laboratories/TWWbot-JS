@@ -2,7 +2,6 @@ name: 'TWWBot-JS Post Next Image'
 on:
   workflow_dispatch:
   schedule:
-    # Run every 5 minutes
     - cron: "*/5 * * * *"
 
 jobs:
@@ -30,12 +29,7 @@ jobs:
           LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
         run: |
           echo "Previous image name: $LAST_IMAGE_NAME"
-          
-          # Capture the output of your script
           NEW_VAL=$(yarn --silent run start)
-          
-          # Use EOF heredoc to safely write to $GITHUB_ENV
-          # This prevents "Unable to process file command" errors with commas/spaces
           echo "NEW_LAST_IMAGE_NAME<<EOF" >> $GITHUB_ENV
           echo "$NEW_VAL" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
