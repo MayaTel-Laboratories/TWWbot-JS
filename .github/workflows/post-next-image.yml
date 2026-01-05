@@ -1,12 +1,11 @@
 name: 'TWWBot-JS Post Next Image'
 on:
-  # Comment out workflow_dispatch and uncomment the schedule to run daily
   workflow_dispatch:
-   schedule:
-    - cron: "0,5,10,15,20,25,30,35,40,45,50,55 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23 * * *"
+  schedule:
+    # Run every 5 minutes
+    - cron: "*/5 * * * *"
 
 jobs:
-  # On some job, do some stuff and persist variables meant to be re-used in other jobs
   post-next-image:
     name: Post Next Image
     runs-on: ubuntu-latest
@@ -31,11 +30,18 @@ jobs:
           LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
         run: |
           echo "Previous image name: $LAST_IMAGE_NAME"
-          echo "Authenticating with user identifier: $BSKY_IDENTIFIER"
-          NEW_LAST_IMAGE_NAME=$(yarn --silent run start)
-          echo "NEW_LAST_IMAGE_NAME=$NEW_LAST_IMAGE_NAME" >> $GITHUB_ENV
+          
+          # Capture the output of your script
+          NEW_VAL=$(yarn --silent run start)
+          
+          # Use EOF heredoc to safely write to $GITHUB_ENV
+          # This prevents "Unable to process file command" errors with commas/spaces
+          echo "NEW_LAST_IMAGE_NAME<<EOF" >> $GITHUB_ENV
+          echo "$NEW_VAL" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
-      - uses: action-pack/set-variable@v1
+      - name: Update repository variable
+        uses: action-pack/set-variable@v1
         with:
           name: 'LAST_IMAGE_NAME'
           value: ${{ env.NEW_LAST_IMAGE_NAME }}
