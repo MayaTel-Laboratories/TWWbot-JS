@@ -36,7 +36,7 @@ function parseImageName(imageName: string, absolutePath: string): ImageDetails |
 }
 function TextFromImageDetails(details: ImageDetails): string {
   if (!details) {
-    return "some sort of error occurred";
+    return "some sort of error occurred in the filename parsing logic. please ping maya until she fixes it";
   }
   const seasonZeroless = parseInt(details.season, 10).toString();
   const episodeZeroless = parseInt(details.episodeNumber, 10).toString();
@@ -47,7 +47,7 @@ function TextFromImageDetails(details: ImageDetails): string {
 async function main() {
   const { LAST_IMAGE_NAME: lastImageName } = process.env;
   const nextImage = await getNextImage({ lastImageName });
-  console.log(`Processing image: ${nextImage.imageName}`);
+  console.error(`Status: Preparing to post ${nextImage.imageName}`);
   const imageDetails = parseImageName(nextImage.imageName, nextImage.absolutePath);
   if (imageDetails) {
     const postText = TextFromImageDetails(imageDetails);
@@ -56,9 +56,11 @@ async function main() {
       text: postText,
       altText: postText,
     });
-    console.log(`Successfully posted: ${postText}`);
+    console.error(`Status: Successfully posted to Bluesky`);
+    console.log(nextImage.imageName); 
   } else {
-    console.error(`Could not parse image details from filename: ${nextImage.imageName}`);
+    console.error(`Error: Could not parse image details from filename: ${nextImage.imageName}`);
+    console.log(lastImageName || "");
   }
 }
 main();
