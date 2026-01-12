@@ -28,16 +28,16 @@ jobs:
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
           LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
         run: |
-          echo "Starting with LAST_IMAGE_NAME: $LAST_IMAGE_NAME"
+          echo "starting with LAST_IMAGE_NAME: $LAST_IMAGE_NAME"
           CUR_LAST="$LAST_IMAGE_NAME"
           for i in $(seq 1 5); do
-            echo "Posting image #$i (using LAST_IMAGE_NAME=$CUR_LAST)"
+            echo "posting image #$i (using LAST_IMAGE_NAME=$CUR_LAST)"
             NEW_VAL=$(LAST_IMAGE_NAME="$CUR_LAST" yarn --silent start)
             if [ -z "$NEW_VAL" ]; then
-              echo "Warning: script returned empty NEW_VAL; aborting loop"
+              echo "script returned empty NEW_VAL; aborting loop"
               break
             fi
-            echo "Posted: $NEW_VAL"
+            echo "posted: $NEW_VAL"
             CUR_LAST="$NEW_VAL"
             sleep 5
           done
