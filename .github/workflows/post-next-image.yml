@@ -1,6 +1,6 @@
 name: 'TWWBot-JS Post Next Image'
 on:
-  #workflow_dispatch:
+  workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"
 
@@ -22,17 +22,26 @@ jobs:
       - name: Install dependencies
         run: yarn install
 
-      - name: Do the post
+      - name: Do the post (5 times, 5s delay between)
         env:
           BSKY_IDENTIFIER: ${{ secrets.BSKY_IDENTIFIER }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
           LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
         run: |
-          echo "Previous image name: $LAST_IMAGE_NAME"
-          NEW_VAL=$(yarn --silent run start)
-          echo "NEW_LAST_IMAGE_NAME<<EOF" >> $GITHUB_ENV
-          echo "$NEW_VAL" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          echo "Starting with LAST_IMAGE_NAME: $LAST_IMAGE_NAME"
+          CUR_LAST="$LAST_IMAGE_NAME"
+          for i in $(seq 1 5); do
+            echo "Posting image #$i (using LAST_IMAGE_NAME=$CUR_LAST)"
+            NEW_VAL=$(LAST_IMAGE_NAME="$CUR_LAST" yarn --silent start)
+            if [ -z "$NEW_VAL" ]; then
+              echo "Warning: script returned empty NEW_VAL; aborting loop"
+              break
+            fi
+            echo "Posted: $NEW_VAL"
+            CUR_LAST="$NEW_VAL"
+            sleep 5
+          done
+          echo "NEW_LAST_IMAGE_NAME=$CUR_LAST" >> $GITHUB_ENV
 
       - name: Update repository variable
         uses: action-pack/set-variable@v1
