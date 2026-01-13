@@ -30,19 +30,25 @@ jobs:
         run: |
           echo "starting with LAST_IMAGE_NAME: $LAST_IMAGE_NAME"
           CUR_LAST="$LAST_IMAGE_NAME"
+          set +e
           for i in $(seq 1 5); do
             echo "posting image #$i (using LAST_IMAGE_NAME=$CUR_LAST)"
-            NEW_VAL=$(LAST_IMAGE_NAME="$CUR_LAST" yarn --silent start)
-            if [ -z "$NEW_VAL" ]; then
-              echo "script returned empty NEW_VAL; aborting loop"
+            OUT=$(LAST_IMAGE_NAME="$CUR_LAST" yarn --silent start 2> >(tee /dev/stderr))
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -ne 0 ]; then
+              echo "error: posting attempt #$i failed with exit code $EXIT_CODE; stopping loop"
               break
             fi
-            echo "posted: $NEW_VAL"
-            CUR_LAST="$NEW_VAL"
+            if [ -z "$OUT" ]; then
+              echo "error: posting attempt #$i returned empty output; stopping loop"
+              break
+            fi
+            echo "posted: $OUT"
+            CUR_LAST="$OUT"
             sleep 5
           done
           echo "NEW_LAST_IMAGE_NAME=$CUR_LAST" >> $GITHUB_ENV
-
+          echo "saved NEW_LAST_IMAGE_NAME=$CUR_LAST"
       - name: Update repository variable
         uses: action-pack/set-variable@v1
         with:
