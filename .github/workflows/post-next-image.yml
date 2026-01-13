@@ -1,6 +1,6 @@
 name: 'TWWBot-JS Post Next Image'
 on:
-  #workflow_dispatch:
+  workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"
 
@@ -33,21 +33,35 @@ jobs:
           set +e
           for i in $(seq 1 5); do
             echo "posting image #$i (using LAST_IMAGE_NAME=$CUR_LAST)"
-            OUT=$(LAST_IMAGE_NAME="$CUR_LAST" yarn --silent start 2> >(tee /dev/stderr))
-            EXIT_CODE=$?
-            if [ $EXIT_CODE -ne 0 ]; then
-              echo "error: posting attempt #$i failed with exit code $EXIT_CODE; stopping loop"
+            SUCCESS=0
+            for attempt in 1 2 3; do
+              OUT=$(LAST_IMAGE_NAME="$CUR_LAST" yarn --silent start)
+              EXIT_CODE=$?
+              if [ $EXIT_CODE -eq 0 ]; then
+                MATCHED_LINE=$(printf '%s\n' "$OUT" | grep -Eo 'TWW_.*__[^[:space:]]+\.jpeg' | tail -n1)
+                if [ -z "$MATCHED_LINE" ]; then
+                  MATCHED_LINE=$(printf '%s\n' "$OUT" | awk 'NF { line=$0 } END { print line }')
+                fi
+                if [ -n "$MATCHED_LINE" ]; then
+                  NEW_LINE="$MATCHED_LINE"
+                  SUCCESS=1
+                  break
+                fi
+              fi
+              if [ $attempt -lt 3 ]; then
+                SLEEP_SEC=$((3 * 2 ** (attempt - 1)))
+                sleep $SLEEP_SEC
+              fi
+            done
+            if [ $SUCCESS -ne 1 ]; then
+              echo "error: posting attempt #$i failed after retries; stopping loop"
               break
             fi
-            if [ -z "$OUT" ]; then
-              echo "error: posting attempt #$i returned empty output; stopping loop"
-              break
-            fi
-            echo "posted: $OUT"
-            CUR_LAST="$OUT"
+            echo "posted: $NEW_LINE"
+            CUR_LAST="$NEW_LINE"
             sleep 5
           done
-          echo "NEW_LAST_IMAGE_NAME=$CUR_LAST" >> $GITHUB_ENV
+          printf 'NEW_LAST_IMAGE_NAME=%s\n' "$CUR_LAST" >> $GITHUB_ENV
           echo "saved NEW_LAST_IMAGE_NAME=$CUR_LAST"
       - name: Update repository variable
         uses: action-pack/set-variable@v1
