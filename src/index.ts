@@ -41,15 +41,15 @@ function parseImageName(imageName: string, absolutePath: string): ImageDetails |
   return null;
 }
 
-function TextFromImageDetails(details: ImageDetails): string {
-  if (!details) {
-    return "some sort of error occurred in the filename parsing logic. please ping maya until she fixes it";
-  }
+function AltTextFromDetails(details: ImageDetails, subtitleText: string | null): string {
   const seasonZeroless = parseInt(details.season, 10).toString();
   const episodeZeroless = parseInt(details.episodeNumber, 10).toString();
-  const frameZeroless = parseInt(details.frameNumber, 10).toString();
-  const totalFrames = details.totalFramesInEpisode.toString();
-  return `The West Wing - ${seasonZeroless}x${episodeZeroless} - ${details.episodeTitle} - Frame ${frameZeroless} of ${totalFrames}`;
+  const episodeTitleEscaped = details.episodeTitle.replace(/"/g, '\\"');
+  if (subtitleText && subtitleText.length > 0) {
+    return `A still frame from The West Wing, ${seasonZeroless}x${episodeZeroless}, "${episodeTitleEscaped}". The subtitle reads "${subtitleText}".`;
+  } else {
+    return `A still frame from The West Wing, ${seasonZeroless}x${episodeZeroless}, "${episodeTitleEscaped}".`;
+  }
 }
 
 function sanitizeLine(raw: string): string {
@@ -57,29 +57,62 @@ function sanitizeLine(raw: string): string {
   t = t.replace(/\r/g, '\n');
   t = t.replace(/\n+/g, ' ');
   t = t.replace(/\s{2,}/g, ' ').trim();
-  t = t.replace(/^[^\w"]+/, '').replace(/[^\w"]+$/, '');
+  t = t.replace(/^[^\w"']+/, '').replace(/[^\w"']+$/, '');
   return t;
 }
 
+function textQualityScore(s: string): number {
+  if (!s) return 0;
+  const total = s.replace(/\s/g, '').length || 1;
+  const alpha = (s.match(/[A-Z]/gi) || []).length;
+  const numeric = (s.match(/[0-9]/g) || []).length;
+  const bad = (s.match(/[^A-Z0-9\s\.,'"\-?!:;()]/gi) || []).length;
+  return ((alpha + numeric) - bad) / total;
+}
+
+async function recognizeWithWorker(worker: any, buf: Buffer): Promise<string> {
+  const { data } = await worker.recognize(buf);
+  let rawLines: string[] = [];
+  if (data && Array.isArray((data as any).lines) && (data as any).lines.length > 0) {
+    rawLines = (data as any).lines.map((l: any) => (typeof l.text === 'string' ? l.text : '')).filter(Boolean);
+  } else if (typeof data.text === 'string') {
+    rawLines = data.text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  }
+  if (rawLines.length === 0) return '';
+  const cleaned = rawLines.map(sanitizeLine).filter(Boolean);
+  return cleaned.join(' ');
+}
+
 async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: number; maxLines?: number; }): Promise<string | null> {
-  const cropPercent = opts?.cropPercent ?? 0.22;
+  const cropPercent = opts?.cropPercent ?? 0.26;
   const maxLines = opts?.maxLines ?? 4;
+  let worker: any = null;
   try {
     const image = sharp(imagePath);
     const metadata = await image.metadata();
     const width = metadata.width || 0;
     const height = metadata.height || 0;
     if (!width || !height) return null;
-    const cropHeight = Math.max(80, Math.round(height * cropPercent));
+    const cropHeight = Math.max(100, Math.round(height * cropPercent));
     const top = Math.max(0, height - cropHeight);
-    const buf = await image
+    const bufA = await image
       .extract({ left: 0, top, width, height: cropHeight })
       .grayscale()
-      .resize({ width: Math.min(1600, Math.round(width)), withoutEnlargement: true })
+      .resize({ width: Math.min(2200, Math.round(width * 1.5)), withoutEnlargement: true })
       .normalize()
+      .median(3)
       .sharpen()
       .toBuffer();
-    const worker = await createWorker({
+    const bufB = await image
+      .extract({ left: 0, top, width, height: cropHeight })
+      .grayscale()
+      .resize({ width: Math.min(2200, Math.round(width * 1.5)), withoutEnlargement: true })
+      .normalize()
+      .median(3)
+      .sharpen()
+      .threshold(150)
+      .toBuffer();
+    worker = await createWorker({
     });
 
     await worker.load();
@@ -87,26 +120,40 @@ async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: n
     await worker.initialize('eng');
     await worker.setParameters({
       tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,\'"-?:!',
       preserve_interword_spaces: '1',
+      user_defined_dpi: '300',
     });
 
-    const { data } = await worker.recognize(buf);
-    await worker.terminate();
-    let rawLines: string[] = [];
-    if (data && Array.isArray((data as any).lines) && (data as any).lines.length > 0) {
-      rawLines = (data as any).lines.map((l: any) => (typeof l.text === 'string' ? l.text : '')).filter(Boolean);
-    } else if (typeof data.text === 'string') {
-      rawLines = data.text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    }
+    const textA = (await recognizeWithWorker(worker, bufA)).toUpperCase().trim();
+    const textB = (await recognizeWithWorker(worker, bufB)).toUpperCase().trim();
+    const scoreA = textQualityScore(textA);
+    const scoreB = textQualityScore(textB);
 
-    if (rawLines.length === 0) return null;
-    const cleaned = rawLines.slice(0, maxLines).map(sanitizeLine).filter(Boolean);
-    if (cleaned.length === 0) return null;
-    const joined = cleaned.join(' | ');
-    return joined;
+    let chosen = textA;
+    if (scoreB > scoreA) chosen = textB;
+
+    const lines = chosen.split(/\s{2,}|\s\|\s| ?\.\s ?/).map(s => s.trim()).filter(Boolean);
+    let finalLines = lines;
+    if (finalLines.length === 0 && chosen.length > 0) {
+      finalLines = chosen.split(/\s/).reduce<string[]>((acc, w) => {
+        if (acc.length === 0) acc.push(w);
+        else if ((acc[acc.length - 1] + ' ' + w).length <= 30) acc[acc.length - 1] = acc[acc.length - 1] + ' ' + w;
+        else acc.push(w);
+        return acc;
+      }, []);
+    }
+    finalLines = finalLines.slice(0, maxLines).map(s => s.replace(/[^A-Z0-9 \.,'"\-?:!]/g, '').trim()).filter(Boolean);
+
+    if (finalLines.length === 0) return null;
+    return finalLines.join(' | ');
   } catch (e) {
     console.error('OCR error:', e);
     return null;
+  } finally {
+    try {
+      if (worker) await worker.terminate();
+    } catch {}
   }
 }
 
@@ -117,17 +164,11 @@ async function main() {
   const imageDetails = parseImageName(nextImage.imageName, nextImage.absolutePath);
 
   if (imageDetails) {
-    const postText = TextFromImageDetails(imageDetails);
-    const ocrText = await ocrSubtitlesTesseract(nextImage.absolutePath, { cropPercent: 0.22, maxLines: 4 });
+    const postText = `The West Wing - ${parseInt(imageDetails.season, 10)}x${parseInt(imageDetails.episodeNumber, 10)} - ${imageDetails.episodeTitle} - Frame ${parseInt(imageDetails.frameNumber, 10)} of ${imageDetails.totalFramesInEpisode}`;
+    const ocrText = await ocrSubtitlesTesseract(nextImage.absolutePath, { cropPercent: 0.26, maxLines: 4 });
+    let altText = AltTextFromDetails(imageDetails, ocrText);
     const maxAltLength = 2000;
-    let altText = postText;
-    if (ocrText) {
-      altText = `${postText} — Burned-in subtitle: "${ocrText}"`;
-    }
-
-    if (altText.length > maxAltLength) {
-      altText = altText.slice(0, maxAltLength - 1) + '…';
-    }
+    if (altText.length > maxAltLength) altText = altText.slice(0, maxAltLength - 1) + '…';
     await postImage({
       path: nextImage.absolutePath,
       text: postText,
