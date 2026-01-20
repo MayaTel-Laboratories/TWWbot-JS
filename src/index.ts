@@ -75,7 +75,7 @@ function normalizeBbox(w: any) {
   const x1 = bbox.x1 ?? bbox.x1 ?? bbox.x2 ?? w.x1 ?? w.x2 ?? (x0 + (bbox.w ?? bbox.width ?? 0));
   const y0 = bbox.y0 ?? bbox.y ?? w.y0 ?? w.y ?? 0;
   const y1 = bbox.y1 ?? bbox.y1 ?? bbox.y2 ?? w.y1 ?? w.y2 ?? (y0 + (bbox.h ?? bbox.height ?? 0));
-  return { text: w.text ?? w.symbol ?? '', x0: Number(x0), x1: Number(x1), y0: Number(y0), y1: Number(y1) };
+  return { text: w.text ?? w.word ?? w.symbol ?? '', x0: Number(x0), x1: Number(x1), y0: Number(y0), y1: Number(y1) };
 }
 
 function buildLinesFromWordBoxes(boxes: Array<{text: string; x0: number; x1: number; y0: number; y1: number;}>, maxGapFactor = 0.45) {
@@ -129,11 +129,51 @@ function buildLinesFromSymbols(symbols: any[], maxGapFactor = 0.45) {
   return buildLinesFromWordBoxes(boxes, maxGapFactor);
 }
 
+async function attachPunctuationToWords(words: any[], symbols: any[]) {
+  if (!symbols || symbols.length === 0 || !words || words.length === 0) return words;
+  const punctRE = /^[\.\,\?\!\:\;'\-\"“”'·]$/;
+  const wboxes = words.map((w: any) => ({ ...(w.bbox || w), text: w.text ?? w.word ?? w.symbol ?? '' }));
+  const sboxes = symbols.map((s: any) => ({ ...(s.bbox || s), text: s.text ?? s.symbol ?? '' }));
+  for (const s of sboxes) {
+    const t = (s.text || '').trim();
+    if (!t || !punctRE.test(t)) continue;
+    const sx0 = Number(s.x0 ?? s.x ?? (s.bbox && s.bbox.x0) ?? 0);
+    const sx1 = Number(s.x1 ?? s.x1 ?? (s.bbox && s.bbox.x1) ?? sx0);
+    const scx = (sx0 + sx1) / 2;
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < wboxes.length; i++) {
+      const w = wboxes[i];
+      const wx0 = Number(w.x0 ?? w.x ?? (w.bbox && w.bbox.x0) ?? 0);
+      const wx1 = Number(w.x1 ?? w.x1 ?? (w.bbox && w.bbox.x1) ?? wx0);
+      const wcx = (wx0 + wx1) / 2;
+      const dist = Math.abs(wcx - scx);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx >= 0) {
+      wboxes[bestIdx].text = (wboxes[bestIdx].text || '') + t;
+    }
+  }
+  return words.map((w: any, i: number) => {
+    const nb = wboxes[i];
+    const out = { ...w };
+    out.text = nb.text;
+    if ('word' in out) out.word = nb.text;
+    return out;
+  });
+}
+
 async function recognizeWithWorker(worker: any, buf: Buffer): Promise<string> {
   const { data } = await worker.recognize(buf);
   let lines: string[] = [];
   if (data && Array.isArray((data as any).words) && (data as any).words.length > 0) {
-    const boxes = (data as any).words.map((w: any) => normalizeBbox(w));
+    const wordsRaw = (data as any).words;
+    const symbolsRaw = Array.isArray((data as any).symbols) ? (data as any).symbols : [];
+    const wordsWithPunct = await attachPunctuationToWords(wordsRaw, symbolsRaw);
+    const boxes = wordsWithPunct.map((w: any) => normalizeBbox(w));
     lines = buildLinesFromWordBoxes(boxes, 0.45);
   } else if (data && Array.isArray((data as any).symbols) && (data as any).symbols.length > 0) {
     lines = buildLinesFromSymbols((data as any).symbols, 0.45);
