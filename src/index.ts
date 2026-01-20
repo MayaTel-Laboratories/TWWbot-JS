@@ -69,17 +69,79 @@ function textQualityScore(s: string): number {
   return ((alpha + numeric) - bad) / total;
 }
 
+function normalizeBbox(w: any) {
+  const bbox = w.bbox || {};
+  const x0 = bbox.x0 ?? bbox.x ?? w.x0 ?? w.x ?? 0;
+  const x1 = bbox.x1 ?? bbox.x1 ?? bbox.x2 ?? w.x1 ?? w.x2 ?? (x0 + (bbox.w ?? bbox.width ?? 0));
+  const y0 = bbox.y0 ?? bbox.y ?? w.y0 ?? w.y ?? 0;
+  const y1 = bbox.y1 ?? bbox.y1 ?? bbox.y2 ?? w.y1 ?? w.y2 ?? (y0 + (bbox.h ?? bbox.height ?? 0));
+  return { text: w.text ?? w.symbol ?? '', x0: Number(x0), x1: Number(x1), y0: Number(y0), y1: Number(y1) };
+}
+
+function buildLinesFromWordBoxes(boxes: Array<{text: string; x0: number; x1: number; y0: number; y1: number;}>, maxGapFactor = 0.45) {
+  if (!boxes.length) return [];
+  boxes.sort((a, b) => {
+    const ay = (a.y0 + a.y1) / 2;
+    const by = (b.y0 + b.y1) / 2;
+    if (Math.abs(ay - by) > 10) return ay - by;
+    return a.x0 - b.x0;
+  });
+  const heights = boxes.map(b => Math.max(1, b.y1 - b.y0));
+  const avgHeight = heights.reduce((s, v) => s + v, 0) / heights.length;
+  const avgCharWidth = boxes.reduce((s, b) => s + ((b.x1 - b.x0) / Math.max(1, b.text.length)), 0) / boxes.length;
+  const lineThreshold = Math.max(10, avgHeight * 0.6);
+  const gapThreshold = Math.max(1, avgCharWidth * maxGapFactor);
+  const lines: Array<Array<typeof boxes[0]>> = [];
+  for (const box of boxes) {
+    const centerY = (box.y0 + box.y1) / 2;
+    let placed = false;
+    for (const line of lines) {
+      const ly = (line[0].y0 + line[0].y1) / 2;
+      if (Math.abs(centerY - ly) <= lineThreshold) {
+        line.push(box);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) lines.push([box]);
+  }
+  const joinedLines = lines.map(line => {
+    line.sort((a, b) => a.x0 - b.x0);
+    let out = '';
+    for (let i = 0; i < line.length; i++) {
+      const w = line[i];
+      if (i === 0) out += w.text.trim();
+      else {
+        const prev = line[i - 1];
+        const gap = w.x0 - prev.x1;
+        if (gap >= gapThreshold) out += ' ' + w.text.trim();
+        else out += w.text.trim();
+      }
+    }
+    return out.trim();
+  });
+  return joinedLines.map(sanitizeLine).filter(Boolean);
+}
+
+function buildLinesFromSymbols(symbols: any[], maxGapFactor = 0.45) {
+  if (!symbols || !symbols.length) return [];
+  const boxes = symbols.map(s => normalizeBbox(s));
+  return buildLinesFromWordBoxes(boxes, maxGapFactor);
+}
+
 async function recognizeWithWorker(worker: any, buf: Buffer): Promise<string> {
   const { data } = await worker.recognize(buf);
-  let rawLines: string[] = [];
-  if (data && Array.isArray((data as any).lines) && (data as any).lines.length > 0) {
-    rawLines = (data as any).lines.map((l: any) => (typeof l.text === 'string' ? l.text : '')).filter(Boolean);
+  let lines: string[] = [];
+  if (data && Array.isArray((data as any).words) && (data as any).words.length > 0) {
+    const boxes = (data as any).words.map((w: any) => normalizeBbox(w));
+    lines = buildLinesFromWordBoxes(boxes, 0.45);
+  } else if (data && Array.isArray((data as any).symbols) && (data as any).symbols.length > 0) {
+    lines = buildLinesFromSymbols((data as any).symbols, 0.45);
   } else if (typeof data.text === 'string') {
-    rawLines = data.text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    lines = data.text.split(/\r?\n/).map(s => sanitizeLine(s)).filter(Boolean);
   }
-  if (rawLines.length === 0) return '';
-  const cleaned = rawLines.map(sanitizeLine).filter(Boolean);
-  return cleaned.join(' ');
+  if (lines.length === 0) return '';
+  return lines.join(' ');
 }
 
 async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: number; maxLines?: number; }): Promise<string | null> {
@@ -124,7 +186,6 @@ async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: n
         .threshold(150)
         .toBuffer();
     } catch (extractErr) {
-      console.error('OCR extract failed, falling back to full image. metadata=', { width, height, cropHeight, top }, 'error=', extractErr);
       const fullBuf = await base.clone()
         .grayscale()
         .resize({ width: Math.min(2200, Math.round(width * 1.5)), withoutEnlargement: true })
@@ -165,7 +226,6 @@ async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: n
     if (finalLines.length === 0) return null;
     return finalLines.join(' | ');
   } catch (e) {
-    console.error('OCR error:', e);
     return null;
   } finally {
     try {
