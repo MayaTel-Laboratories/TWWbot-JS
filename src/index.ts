@@ -79,7 +79,6 @@ async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: n
       .normalize()
       .sharpen()
       .toBuffer();
-
     const worker = await createWorker({
     });
 
@@ -87,7 +86,7 @@ async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: n
     await worker.loadLanguage('eng');
     await worker.initialize('eng');
     await worker.setParameters({
-      tessedit_pageseg_mode: PSM.SINGLE_BLOCK.toString(),
+      tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
       preserve_interword_spaces: '1',
     });
 
