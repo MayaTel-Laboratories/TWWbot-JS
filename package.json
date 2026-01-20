@@ -9,7 +9,8 @@
   "dependencies": {
     "@atproto/api": "^0.3.12",
     "dotenv": "^16.3.1",
-    "sharp": "^0.32.1"
+    "sharp": "^0.32.1",
+    "tesseract.js": "^4.1.0"
   },
   "scripts": {
     "lint": "eslint .",
