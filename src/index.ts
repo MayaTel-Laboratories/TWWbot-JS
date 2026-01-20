@@ -87,19 +87,26 @@ async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: n
   const maxLines = opts?.maxLines ?? 4;
   let worker: any = null;
   try {
-    const image = sharp(imagePath);
-    const metadata = await image.metadata();
+    const base = sharp(imagePath);
+    const metadata = await base.metadata();
     const width = Math.round(metadata.width || 0);
     const height = Math.round(metadata.height || 0);
     if (!width || !height) return null;
     const minCrop = 40;
     const desiredCrop = Math.round(height * cropPercent);
-    const cropHeight = Math.min(height, Math.max(minCrop, desiredCrop));
-    const top = Math.max(0, height - cropHeight);
+    let cropHeight = Math.min(height, Math.max(minCrop, desiredCrop));
+    let top = Math.max(0, height - cropHeight);
+    if (top + cropHeight > height) {
+      cropHeight = Math.max(1, height - top);
+    }
+    if (cropHeight <= 0) {
+      cropHeight = Math.min(height, Math.max(1, desiredCrop));
+      top = Math.max(0, height - cropHeight);
+    }
     let bufA: Buffer;
     let bufB: Buffer;
     try {
-      bufA = await image
+      bufA = await base.clone()
         .extract({ left: 0, top, width, height: cropHeight })
         .grayscale()
         .resize({ width: Math.min(2200, Math.round(width * 1.5)), withoutEnlargement: true })
@@ -107,7 +114,7 @@ async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: n
         .median(3)
         .sharpen()
         .toBuffer();
-      bufB = await image
+      bufB = await base.clone()
         .extract({ left: 0, top, width, height: cropHeight })
         .grayscale()
         .resize({ width: Math.min(2200, Math.round(width * 1.5)), withoutEnlargement: true })
@@ -118,7 +125,7 @@ async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: n
         .toBuffer();
     } catch (extractErr) {
       console.error('OCR extract failed, falling back to full image. metadata=', { width, height, cropHeight, top }, 'error=', extractErr);
-      const fullBuf = await image
+      const fullBuf = await base.clone()
         .grayscale()
         .resize({ width: Math.min(2200, Math.round(width * 1.5)), withoutEnlargement: true })
         .normalize()
