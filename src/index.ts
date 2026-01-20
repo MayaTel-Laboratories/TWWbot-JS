@@ -4,7 +4,7 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import sharp from 'sharp';
+import sharp = require('sharp');
 import { createWorker, PSM } from 'tesseract.js';
 
 dotenv.config();
@@ -55,7 +55,7 @@ function TextFromImageDetails(details: ImageDetails): string {
 function sanitizeLine(raw: string): string {
   let t = raw || '';
   t = t.replace(/\r/g, '\n');
-  t = t.replace(/\n+/g, ' '); 
+  t = t.replace(/\n+/g, ' ');
   t = t.replace(/\s{2,}/g, ' ').trim();
   t = t.replace(/^[^\w"]+/, '').replace(/[^\w"]+$/, '');
   return t;
@@ -79,7 +79,8 @@ async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: n
       .normalize()
       .sharpen()
       .toBuffer();
-    const worker = createWorker({
+
+    const worker = await createWorker({
     });
 
     await worker.load();
@@ -93,8 +94,8 @@ async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: n
     const { data } = await worker.recognize(buf);
     await worker.terminate();
     let rawLines: string[] = [];
-    if (data && Array.isArray(data.lines) && data.lines.length > 0) {
-      rawLines = data.lines.map((l: any) => (typeof l.text === 'string' ? l.text : '')).filter(Boolean);
+    if (data && Array.isArray((data as any).lines) && (data as any).lines.length > 0) {
+      rawLines = (data as any).lines.map((l: any) => (typeof l.text === 'string' ? l.text : '')).filter(Boolean);
     } else if (typeof data.text === 'string') {
       rawLines = data.text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     }
