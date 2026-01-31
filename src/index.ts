@@ -39,31 +39,55 @@ function countFramesFromManifest(manifestPath: string | undefined, episodePrefix
 async function countFramesFromGitHub(repo: string, imagePath: string, ref: string, episodePrefix: string, token?: string): Promise<number | null> {
   try {
     if (!repo) return null;
-    const perPage = 100;
-    let page = 1;
-    let totalCount = 0;
     const headers: Record<string,string> = {
       'Accept': 'application/vnd.github+json'
     };
     if (token) headers['Authorization'] = `token ${token}`;
-
-    while (true) {
-      const url = `https://api.github.com/repos/${repo}/contents/${encodeURIComponent(imagePath)}?ref=${encodeURIComponent(ref)}&per_page=${perPage}&page=${page}`;
-      const res = await fetch(url, { headers });
-      if (!res.ok) {
-        return null;
+    const branchUrl = `https://api.github.com/repos/${repo}/branches/${encodeURIComponent(ref)}`;
+    let res = await fetch(branchUrl, { headers });
+    if (!res.ok) {
+      const treeUrlTry = `https://api.github.com/repos/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`;
+      res = await fetch(treeUrlTry, { headers });
+      if (!res.ok) return null;
+      const treeDataTry = await res.json();
+      const treeTry = Array.isArray(treeDataTry?.tree) ? treeDataTry.tree : null;
+      if (!treeTry) return null;
+      const normalizedPath = imagePath.replace(/^\/+|\/+$/g, '');
+      const prefix = normalizedPath.length ? `${normalizedPath}/` : '';
+      let c = 0;
+      for (const entry of treeTry) {
+        if (!entry || entry.type !== 'blob') continue;
+        const fullPath = entry.path || '';
+        if (!fullPath.startsWith(prefix)) continue;
+        const name = fullPath.slice(prefix.length);
+        if (name.startsWith(episodePrefix) && name.toLowerCase().endsWith('.jpeg')) c++;
       }
-      const data = await res.json();
-      if (!Array.isArray(data)) return null;
-      for (const it of data) {
-        const name = it && (it.name || it.path) ? (it.name || it.path) : '';
-        if (!name) continue;
-        if (name.startsWith(episodePrefix) && name.toLowerCase().endsWith('.jpeg')) totalCount++;
-      }
-      if (data.length < perPage) break;
-      page++;
+      return c;
     }
-    return totalCount;
+
+    const branchData = await res.json();
+    const sha = branchData?.commit?.sha;
+    if (!sha) return null;
+    const treeUrl = `https://api.github.com/repos/${repo}/git/trees/${encodeURIComponent(sha)}?recursive=1`;
+    res = await fetch(treeUrl, { headers });
+    if (!res.ok) return null;
+    const treeData = await res.json();
+    const tree = Array.isArray(treeData?.tree) ? treeData.tree : null;
+    if (!tree) return null;
+    const normalizedPath = imagePath.replace(/^\/+|\/+$/g, '');
+    const prefix = normalizedPath.length ? `${normalizedPath}/` : '';
+    let count = 0;
+    for (const entry of tree) {
+      if (!entry || entry.type !== 'blob') continue;
+      const fullPath = entry.path || '';
+      if (!fullPath.startsWith(prefix)) continue;
+      const name = fullPath.slice(prefix.length);
+      if (name.startsWith(episodePrefix) && name.toLowerCase().endsWith('.jpeg')) {
+        count++;
+      }
+    }
+
+    return count;
   } catch (e) {
     return null;
   }
@@ -89,8 +113,9 @@ async function getImageDetails(imageName: string, absolutePath: string): Promise
       totalFramesInEpisode: manifestCount,
     };
   }
+
   const repo = process.env.GITHUB_REPOSITORY || '';
-  const ref = process.env.IMAGE_BRANCH || process.env.GITHUB_REF || 'main';
+  const ref = process.env.IMAGE_BRANCH || process.env.GITHUB_REF?.replace(/^refs\/heads\//, '') || 'main';
   const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || undefined;
   const apiCount = await countFramesFromGitHub(repo, process.env.IMAGE_PATH_IN_REPO || 'imagequeue', ref, episodePrefix, token);
   if (apiCount !== null && apiCount > 0) {
@@ -126,7 +151,6 @@ async function getImageDetails(imageName: string, absolutePath: string): Promise
     };
   }
 }
-
 
 function AltTextFromDetails(details: ImageDetails, subtitleText: string | null): string {
   const seasonZeroless = parseInt(details.season, 10).toString();
