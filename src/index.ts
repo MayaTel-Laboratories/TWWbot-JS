@@ -61,7 +61,6 @@ async function countFramesFromGitHub(repo: string, imagePath: string, ref: strin
       const fileRegex = new RegExp(`^TWW_${season}x${episode}_.+__\\d+\\.jpeg$`, 'i');
 
       let c = 0;
-      const sampleMatches: string[] = [];
       for (const entry of treeTry) {
         if (!entry || entry.type !== 'blob') continue;
         const fullPath = entry.path || '';
@@ -69,11 +68,8 @@ async function countFramesFromGitHub(repo: string, imagePath: string, ref: strin
         const basename = fullPath.split('/').pop() || fullPath;
         if (fileRegex.test(basename)) {
           c++;
-          if (sampleMatches.length < 10) sampleMatches.push(basename);
         }
       }
-      console.error(`countFramesFromGitHub (fallback-sha) treeEntries=${treeTry.length}, matches=${c}`);
-      if (sampleMatches.length) console.error('sample matches:', sampleMatches.join(', '));
       return c;
     }
 
@@ -83,7 +79,6 @@ async function countFramesFromGitHub(repo: string, imagePath: string, ref: strin
     const treeUrl = `https://api.github.com/repos/${repo}/git/trees/${encodeURIComponent(sha)}?recursive=1`;
     res = await fetch(treeUrl, { headers });
     if (!res.ok) {
-      console.error('countFramesFromGitHub: failed to fetch tree:', res.status, res.statusText);
       return null;
     }
     const treeData = await res.json();
@@ -92,8 +87,8 @@ async function countFramesFromGitHub(repo: string, imagePath: string, ref: strin
     const normalizedPath = imagePath.replace(/^\/+|\/+$/g, '');
     const prefix = normalizedPath.length ? `${normalizedPath}/` : '';
     const fileRegex = new RegExp(`^TWW_${season}x${episode}_.+__\\d+\\.jpeg$`, 'i');
+
     let count = 0;
-    const sampleMatches: string[] = [];
     for (const entry of tree) {
       if (!entry || entry.type !== 'blob') continue;
       const fullPath = entry.path || '';
@@ -101,12 +96,9 @@ async function countFramesFromGitHub(repo: string, imagePath: string, ref: strin
       const basename = fullPath.split('/').pop() || fullPath;
       if (fileRegex.test(basename)) {
         count++;
-        if (sampleMatches.length < 10) sampleMatches.push(basename);
       }
     }
 
-    console.error(`countFramesFromGitHub: treeEntries=${tree.length}, matches=${count}, sha=${sha}`);
-    if (sampleMatches.length) console.error('sample matches:', sampleMatches.join(', '));
     return count;
   } catch (e) {
     console.error('countFramesFromGitHub exception:', e);
@@ -417,7 +409,6 @@ async function main() {
   const { LAST_IMAGE_NAME: lastImageName } = process.env;
   const nextImage = await getNextImage({ lastImageName });
   console.error(`Status: Preparing to post ${nextImage.imageName}`);
-
   const imageDetails = await getImageDetails(nextImage.imageName, nextImage.absolutePath);
   if (imageDetails) {
     const postText = `The West Wing - ${parseInt(imageDetails.season, 10)}x${parseInt(imageDetails.episodeNumber, 10)} - ${imageDetails.episodeTitle} - Frame ${parseInt(imageDetails.frameNumber, 10)} of ${imageDetails.totalFramesInEpisode}`;
