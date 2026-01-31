@@ -113,7 +113,7 @@ jobs:
           set -euo pipefail
           corepack enable
           if [ -f yarn.lock ]; then
-            if grep -q '^# yarn lockfile v1' yarn.lock 2>/dev/null || grep -q '^# don't edit this.' yarn.lock 2>/dev/null; then
+            if grep -q '^# yarn lockfile v1' yarn.lock 2>/dev/null || grep -q '^# do not touch' yarn.lock 2>/dev/null; then
               echo "Detected Yarn Classic (v1) lockfile. Activating Yarn classic (1.22.x)..."
               corepack prepare yarn@1.22.19 --activate
               yarn install --frozen-lockfile
