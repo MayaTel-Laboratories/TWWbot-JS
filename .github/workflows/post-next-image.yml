@@ -8,7 +8,6 @@ env:
   IMAGE_DIR: imagequeue
   IMAGE_PATH_IN_REPO: imagequeue
   IMAGE_BRANCH: main
-  POSTS_PER_RUN: '5'
 
 jobs:
   post-next-image:
@@ -28,7 +27,7 @@ jobs:
             bin/
             .github/scripts/
 
-      - name: compute image manifest (files + sha)
+      - name: compare cache with live directory
         id: manifest
         env:
           GITHUB_API: https://api.github.com
@@ -41,147 +40,71 @@ jobs:
           set -euo pipefail
           echo "Querying GitHub for files in ${IMAGE_PATH} at ref ${REF}..."
           resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
-            "${GITHUB_API}/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}")
-
-          if [ -z "$resp" ] || [ "$(printf '%s' "$resp" | jq -r 'type')" = "null" ]; then
+            "${GITHUB_API}/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}" )
+          if [ -z "$resp" ]; then
             echo "noresp=true" >> $GITHUB_OUTPUT
             echo "MANIFEST_KEY=disk-empty" >> $GITHUB_OUTPUT
-            echo "MANIFEST_JSON=" >> $GITHUB_OUTPUT
             exit 0
           fi
-
           manifest=$(printf '%s\n' "$resp" | jq -r '.[] | select(.type=="file") | "\(.path):\(.sha)"' | sort | tr '\n' '|' )
           if [ -z "$manifest" ]; then
             echo "MANIFEST_KEY=empty" >> $GITHUB_OUTPUT
             echo "no_files=true" >> $GITHUB_OUTPUT
-            echo "MANIFEST_JSON=" >> $GITHUB_OUTPUT
             exit 0
           fi
-
           manifest_hash=$(printf '%s' "$manifest" | sha1sum | awk '{print $1}')
-          key="imagequeue-manifest-${{ runner.os }}-${manifest_hash}"
-          mkdir -p .image-manifest
-          printf '%s\n' "$resp" > .image-manifest/manifest.json
-
+          key="imagequeue-${{ runner.os }}-${manifest_hash}"
           echo "MANIFEST=$manifest" >> $GITHUB_OUTPUT
           echo "MANIFEST_KEY=$key" >> $GITHUB_OUTPUT
-          echo "MANIFEST_JSON=.image-manifest/manifest.json" >> $GITHUB_OUTPUT
           echo "manifest_length=$(printf '%s' "$manifest" | wc -c)" >> $GITHUB_OUTPUT
 
-      - name: cache small manifest metadata
+      - name: restore imagequeue cache
         uses: actions/cache@v4
+        id: cache
         with:
-          path: .image-manifest
+          path: ${{ env.IMAGE_DIR }}
           key: ${{ steps.manifest.outputs.MANIFEST_KEY }}
           restore-keys: |
-            imagequeue-manifest-${{ runner.os }}-
+            imagequeue-${{ runner.os }}-
 
       - name: ensure image directory exists
         run: mkdir -p "${{ env.IMAGE_DIR }}"
 
-      - name: download only next images (deterministic numeric order)
+      - name: populate imagequeue (on cache miss)
+        if: steps.cache.outputs.cache-hit != 'true'
         env:
-          POSTS_PER_RUN: ${{ env.POSTS_PER_RUN }}
-          IMAGE_DIR: ${{ env.IMAGE_DIR }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_API: https://api.github.com
           REPO: ${{ github.repository }}
           REF: ${{ env.IMAGE_BRANCH }}
           IMAGE_PATH: ${{ env.IMAGE_PATH_IN_REPO }}
-          LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
+          IMAGE_DIR: ${{ env.IMAGE_DIR }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          N=${POSTS_PER_RUN:-5}
-          mkdir -p "${IMAGE_DIR}"
-
-          echo "Fetching manifest from API..."
-          resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
-            "https://api.github.com/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}")
-
-          if [ -z "$resp" ]; then
-            echo "No manifest returned; nothing to download."
+          echo "Cache miss - downloading image list from GitHub contents API..."
+          resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" "${GITHUB_API}/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}")
+          files=$(printf '%s' "$resp" | jq -r '.[] | select(.type=="file") | @base64')
+          if [ -z "$files" ]; then
+            echo "No files found in ${IMAGE_PATH} at ${REF}."
             exit 0
           fi
-
-          sorted_file=$(mktemp)
-
-          # Use jq to extract name and download_url, then awk (FS="\t") to parse TWW_... names,
-          # build a sortable key, sort numerically, and emit name/url pairs. Using FS="\t"
-          # preserves spaces in filenames.
-          printf '%s\n' "$resp" \
-            | jq -r '.[] | select(.type=="file") | "\(.name)\t\(.download_url)"' \
-            | awk 'BEGIN{IGNORECASE=1; FS="\t"; OFS="\t"} \
-                { name=$1; url=$2; \
-                  if (match(name, /^TWW_([0-9]+)x([0-9]+)_(.*)__([0-9]+)\.(jpe?g|png|gif|bmp)$/i, m)) { \
-                    season=sprintf("%08d", m[1]); ep=sprintf("%08d", m[2]); frame=sprintf("%08d", m[4]); \
-                    key = season ep frame; print key, name, url; \
-                  } \
-                }' \
-            | sort -k1,1n \
-            | cut -f2- \
-            > "${sorted_file}"
-
-          if [ ! -s "${sorted_file}" ]; then
-            echo "No TWW images found in manifest (after parsing)."
-            rm -f "${sorted_file}"
-            exit 0
-          fi
-
-          mapfile -t lines < "${sorted_file}"
-          names=()
-          urls=()
-          for l in "${lines[@]}"; do
-            name=$(printf '%s' "$l" | awk -F $'\t' '{print $1}')
-            url=$(printf '%s' "$l" | awk -F $'\t' '{print $2}')
-            names+=("$name")
-            urls+=("$url")
-          done
-
-          rm -f "${sorted_file}"
-
-          # Find start index after LAST_IMAGE_NAME (if provided)
-          start_index=0
-          if [ -n "${LAST_IMAGE_NAME:-}" ]; then
-            for i in "${!names[@]}"; do
-              if [ "${names[i]}" = "${LAST_IMAGE_NAME}" ]; then
-                start_index=$((i + 1))
-                break
-              fi
-            done
-          fi
-
-          total=${#names[@]}
-          if [ "$total" -eq 0 ]; then
-            echo "No names available."
-            exit 0
-          fi
-
-          to_download=()
-          to_download_urls=()
-          idx=$start_index
-          for cnt in $(seq 1 "$N"); do
-            if [ "$idx" -ge "$total" ]; then
-              idx=0
-            fi
-            to_download+=("${names[idx]}")
-            to_download_urls+=("${urls[idx]}")
-            idx=$((idx + 1))
-          done
-
-          echo "Will download ${#to_download[@]} images (next ${N})."
-          for i in "${!to_download[@]}"; do
-            name="${to_download[i]}"
-            url="${to_download_urls[i]}"
+          echo "$resp" | jq -r '.[] | select(.type=="file") | "\(.name)\t\(.download_url)\t\(.size)\t\(.sha)"' | while IFS=$'\t' read -r name url size sha; do
             outpath="${IMAGE_DIR}/${name}"
             if [ -f "$outpath" ]; then
-              echo "Skipping existing ${name}"
-              continue
+              if stat --version >/dev/null 2>&1; then
+                local_size=$(stat -c%s "$outpath")
+              else
+                local_size=$(stat -f%z "$outpath")
+              fi
+              if [ "$local_size" -eq "$size" ]; then
+                echo "Skipping existing $outpath (size matches)"
+                continue
+              else
+                echo "$name exists but size differs (local=$local_size remote=$size), re-downloading"
+              fi
             fi
-            if [ -z "$url" ]; then
-              echo "No download URL for ${name}; skipping."
-              continue
-            fi
-            echo "Downloading ${name} ..."
+            echo "Downloading $name ..."
             curl -sSfL -o "$outpath" "$url"
           done
 
@@ -213,15 +136,12 @@ jobs:
             corepack prepare yarn@stable --activate
             yarn install
           fi
+
       - name: Do the posts
         env:
           BSKY_IDENTIFIER: ${{ secrets.BSKY_IDENTIFIER }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
           LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
-          MANIFEST_JSON: ${{ steps.manifest.outputs.MANIFEST_JSON }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          IMAGE_PATH_IN_REPO: ${{ env.IMAGE_PATH_IN_REPO }}
         shell: bash
         run: |
           echo "starting with LAST_IMAGE_NAME: $LAST_IMAGE_NAME"
