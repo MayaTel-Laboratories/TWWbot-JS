@@ -104,35 +104,23 @@ jobs:
           fi
 
           sorted_file=$(mktemp)
-          script_file=$(mktemp)
-
-          cat > "${script_file}" <<'PY'
-import sys, json, re
-data = json.load(sys.stdin)
-items = []
-pat = re.compile(r'^TWW_(\d+)x(\d{1,})_(.*?)__(\d+)\.(jpe?g|png|gif|bmp)$', re.I)
-for it in data:
-    if it.get('type') != 'file':
-        continue
-    name = it.get('name','')
-    m = pat.match(name)
-    if not m:
-        continue
-    season = int(m.group(1))
-    episode = int(m.group(2))
-    frame = int(m.group(4))
-    url = it.get('download_url','')
-    items.append((season, episode, frame, name, url))
-items.sort()
-for s,e,f,name,url in items:
-    print(f"{s}\t{e}\t{f}\t{name}\t{url}")
-PY
-
-          printf '%s\n' "$resp" | python3 "${script_file}" > "${sorted_file}"
+          # Use jq to extract name and download_url, then awk to parse TWW_... names, build a sortable key, sort numerically, and emit name/url pairs.
+          printf '%s\n' "$resp" \
+            | jq -r '.[] | select(.type=="file") | "\(.name)\t\(.download_url)"' \
+            | awk 'BEGIN{IGNORECASE=1; OFS="\t"} \
+                { name=$1; url=$2; \
+                  if (match(name, /^TWW_([0-9]+)x([0-9]+)_(.*)__([0-9]+)\.(jpe?g|png|gif|bmp)$/i, m)) { \
+                    season=sprintf("%08d", m[1]); ep=sprintf("%08d", m[2]); frame=sprintf("%08d", m[4]); \
+                    key = season ep frame; print key, name, url; \
+                  } \
+                }' \
+            | sort -k1,1n \
+            | cut -f2- \
+            > "${sorted_file}"
 
           if [ ! -s "${sorted_file}" ]; then
             echo "No TWW images found in manifest (after parsing)."
-            rm -f "${sorted_file}" "${script_file}"
+            rm -f "${sorted_file}"
             exit 0
           fi
 
@@ -140,14 +128,15 @@ PY
           names=()
           urls=()
           for l in "${lines[@]}"; do
-            name=$(printf '%s' "$l" | awk -F $'\t' '{print $4}')
-            url=$(printf '%s' "$l" | awk -F $'\t' '{print $5}')
+            name=$(printf '%s' "$l" | awk -F $'\t' '{print $1}')
+            url=$(printf '%s' "$l" | awk -F $'\t' '{print $2}')
             names+=("$name")
             urls+=("$url")
           done
 
-          rm -f "${sorted_file}" "${script_file}"
+          rm -f "${sorted_file}"
 
+          # Find start index after LAST_IMAGE_NAME (if provided)
           start_index=0
           if [ -n "${LAST_IMAGE_NAME:-}" ]; then
             for i in "${!names[@]}"; do
@@ -176,7 +165,7 @@ PY
             idx=$((idx + 1))
           done
 
-          echo "will download ${#to_download[@]} images (next ${N})."
+          echo "Will download ${#to_download[@]} images (next ${N})."
           for i in "${!to_download[@]}"; do
             name="${to_download[i]}"
             url="${to_download_urls[i]}"
