@@ -14,12 +14,12 @@ jobs:
     name: Post Next Image
     runs-on: ubuntu-latest
     steps:
-      - name: Minimal checkout (shallow, only repo metadata)
+      - name: checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Compute image manifest key (files+sha) via GitHub API
+      - name: compare cache with live directory
         id: manifest
         env:
           GITHUB_API: https://api.github.com
@@ -31,8 +31,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "Querying GitHub for files in ${IMAGE_PATH} at ref ${REF}..."
-          # Use the contents API to list the directory. If there are many pages, this needs pagination.
-          # For large directories you may need to paginate; this sample assumes the directory listing fits in one page.
           resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}" )
           if [ -z "$resp" ]; then
@@ -40,35 +38,31 @@ jobs:
             echo "MANIFEST_KEY=disk-empty" >> $GITHUB_OUTPUT
             exit 0
           fi
-          # Build a manifest string of filename:sha pairs sorted deterministically
           manifest=$(printf '%s\n' "$resp" | jq -r '.[] | select(.type=="file") | "\(.path):\(.sha)"' | sort | tr '\n' '|' )
           if [ -z "$manifest" ]; then
-            # directory may be empty or not found
             echo "MANIFEST_KEY=empty" >> $GITHUB_OUTPUT
             echo "no_files=true" >> $GITHUB_OUTPUT
             exit 0
           fi
-          # hash the manifest string to produce a compact cache key segment
           manifest_hash=$(printf '%s' "$manifest" | sha1sum | awk '{print $1}')
           key="imagequeue-${{ runner.os }}-${manifest_hash}"
           echo "MANIFEST=$manifest" >> $GITHUB_OUTPUT
           echo "MANIFEST_KEY=$key" >> $GITHUB_OUTPUT
           echo "manifest_length=$(printf '%s' "$manifest" | wc -c)" >> $GITHUB_OUTPUT
 
-      - name: Restore imagequeue cache
+      - name: restore imagequeue cache
         uses: actions/cache@v4
         id: cache
         with:
           path: ${{ env.IMAGE_DIR }}
           key: ${{ steps.manifest.outputs.MANIFEST_KEY }}
-          # allow partial restore by OS if key changed
           restore-keys: |
             imagequeue-${{ runner.os }}-
 
-      - name: Ensure image directory exists
+      - name: ensure image directory exists
         run: mkdir -p "${{ env.IMAGE_DIR }}"
 
-      - name: Populate imagequeue from API if cache miss
+      - name: populate imagequeue
         if: steps.cache.outputs.cache-hit != 'true'
         env:
           GITHUB_API: https://api.github.com
@@ -82,19 +76,14 @@ jobs:
           set -euo pipefail
           echo "Cache miss or cache not found - downloading image list from GitHub contents API..."
           resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" "${GITHUB_API}/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}")
-          # if no files, nothing to do
           files=$(printf '%s' "$resp" | jq -r '.[] | select(.type=="file") | @base64')
           if [ -z "$files" ]; then
             echo "No files found in ${IMAGE_PATH} at ${REF}."
             exit 0
           fi
-          # Download each file into the image dir. Use download_url in the API response.
           echo "$resp" | jq -r '.[] | select(.type=="file") | "\(.name)\t\(.download_url)\t\(.sha)"' | while IFS=$'\t' read -r name url sha; do
             outpath="${IMAGE_DIR}/${name}"
-            # if file already exists and its blob SHA matches, skip (avoids re-download)
             if [ -f "$outpath" ]; then
-              # compute sha1 of existing file's blob on the repo? We can't easily compute git blob sha here.
-              # Instead we can check file size/dates or re-download forcibly. For safety we skip if exists.
               echo "Skipping existing $outpath (already present)"
               continue
             fi
@@ -102,16 +91,18 @@ jobs:
             curl -sSfL -o "$outpath" "$url"
           done
 
-      - name: Use Node.js
+      - name: Use Node.js (with Yarn cache)
         uses: actions/setup-node@v3
         with:
           node-version: 20
-
-      - name: Install Yarn
-        run: npm install -g yarn
+          cache: 'yarn'
+          cache-dependency-path: '**/yarn.lock'
 
       - name: Install dependencies
-        run: yarn install
+        run: |
+          corepack enable
+          corepack prepare yarn@stable --activate
+          yarn install --frozen-lockfile
 
       - name: Do the posts
         env:
