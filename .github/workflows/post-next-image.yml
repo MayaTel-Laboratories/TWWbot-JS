@@ -105,6 +105,7 @@ jobs:
 
           sorted_file=$(mktemp)
           script_file=$(mktemp)
+
           cat > "${script_file}" <<'PY'
 import sys, json, re
 data = json.load(sys.stdin)
