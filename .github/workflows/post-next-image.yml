@@ -219,6 +219,9 @@ jobs:
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
           LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
           MANIFEST_JSON: ${{ steps.manifest.outputs.MANIFEST_JSON }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          IMAGE_PATH_IN_REPO: ${{ env.IMAGE_PATH_IN_REPO }}
         shell: bash
         run: |
           echo "starting with LAST_IMAGE_NAME: $LAST_IMAGE_NAME"

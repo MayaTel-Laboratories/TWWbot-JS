@@ -36,51 +36,97 @@ function countFramesFromManifest(manifestPath: string | undefined, episodePrefix
   }
 }
 
-function parseImageName(imageName: string, absolutePath: string): ImageDetails | null {
-  const matchResult = imageName.match(/^TWW_(\d+)x(\d{1,})_(.*)__(\d+)\.jpeg$/i);
-  if (matchResult) {
-    const season = matchResult[1];
-    const episodeNumber = matchResult[2];
-    const episodeTitle = matchResult[3];
-    const frameNumber = matchResult[4];
-    const episodePrefix = `TWW_${season}x${episodeNumber}_${episodeTitle}__`;
-    const manifestPath = process.env.MANIFEST_JSON;
-    const manifestCount = countFramesFromManifest(manifestPath, episodePrefix);
-    if (manifestCount !== null) {
-      return {
-        season,
-        episodeNumber,
-        episodeTitle,
-        frameNumber,
-        totalFramesInEpisode: manifestCount,
-      };
-    }
+async function countFramesFromGitHub(repo: string, imagePath: string, ref: string, episodePrefix: string, token?: string): Promise<number | null> {
+  try {
+    if (!repo) return null;
+    const perPage = 100;
+    let page = 1;
+    let totalCount = 0;
+    const headers: Record<string,string> = {
+      'Accept': 'application/vnd.github+json'
+    };
+    if (token) headers['Authorization'] = `token ${token}`;
 
-    try {
-      const directoryPath = path.dirname(absolutePath);
-      const files = fs.readdirSync(directoryPath);
-      const totalFrames = files.filter(file =>
-        file.startsWith(episodePrefix) && file.toLowerCase().endsWith('.jpeg')
-      ).length;
-      return {
-        season,
-        episodeNumber,
-        episodeTitle,
-        frameNumber,
-        totalFramesInEpisode: totalFrames,
-      };
-    } catch (e) {
-      return {
-        season,
-        episodeNumber,
-        episodeTitle,
-        frameNumber,
-        totalFramesInEpisode: 0,
-      };
+    while (true) {
+      const url = `https://api.github.com/repos/${repo}/contents/${encodeURIComponent(imagePath)}?ref=${encodeURIComponent(ref)}&per_page=${perPage}&page=${page}`;
+      const res = await fetch(url, { headers });
+      if (!res.ok) {
+        return null;
+      }
+      const data = await res.json();
+      if (!Array.isArray(data)) return null;
+      for (const it of data) {
+        const name = it && (it.name || it.path) ? (it.name || it.path) : '';
+        if (!name) continue;
+        if (name.startsWith(episodePrefix) && name.toLowerCase().endsWith('.jpeg')) totalCount++;
+      }
+      if (data.length < perPage) break;
+      page++;
     }
+    return totalCount;
+  } catch (e) {
+    return null;
   }
-  return null;
 }
+
+async function getImageDetails(imageName: string, absolutePath: string): Promise<ImageDetails | null> {
+  const matchResult = imageName.match(/^TWW_(\d+)x(\d{1,})_(.*)__(\d+)\.jpeg$/i);
+  if (!matchResult) return null;
+
+  const season = matchResult[1];
+  const episodeNumber = matchResult[2];
+  const episodeTitle = matchResult[3];
+  const frameNumber = matchResult[4];
+  const episodePrefix = `TWW_${season}x${episodeNumber}_${episodeTitle}__`;
+  const manifestPath = process.env.MANIFEST_JSON;
+  const manifestCount = countFramesFromManifest(manifestPath, episodePrefix);
+  if (manifestCount !== null && manifestCount > 0) {
+    return {
+      season,
+      episodeNumber,
+      episodeTitle,
+      frameNumber,
+      totalFramesInEpisode: manifestCount,
+    };
+  }
+  const repo = process.env.GITHUB_REPOSITORY || '';
+  const ref = process.env.IMAGE_BRANCH || process.env.GITHUB_REF || 'main';
+  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || undefined;
+  const apiCount = await countFramesFromGitHub(repo, process.env.IMAGE_PATH_IN_REPO || 'imagequeue', ref, episodePrefix, token);
+  if (apiCount !== null && apiCount > 0) {
+    return {
+      season,
+      episodeNumber,
+      episodeTitle,
+      frameNumber,
+      totalFramesInEpisode: apiCount,
+    };
+  }
+
+  try {
+    const directoryPath = path.dirname(absolutePath);
+    const files = fs.readdirSync(directoryPath);
+    const totalFrames = files.filter(file =>
+      file.startsWith(episodePrefix) && file.toLowerCase().endsWith('.jpeg')
+    ).length;
+    return {
+      season,
+      episodeNumber,
+      episodeTitle,
+      frameNumber,
+      totalFramesInEpisode: totalFrames,
+    };
+  } catch (e) {
+    return {
+      season,
+      episodeNumber,
+      episodeTitle,
+      frameNumber,
+      totalFramesInEpisode: 0,
+    };
+  }
+}
+
 
 function AltTextFromDetails(details: ImageDetails, subtitleText: string | null): string {
   const seasonZeroless = parseInt(details.season, 10).toString();
@@ -334,7 +380,8 @@ async function main() {
   const { LAST_IMAGE_NAME: lastImageName } = process.env;
   const nextImage = await getNextImage({ lastImageName });
   console.error(`Status: Preparing to post ${nextImage.imageName}`);
-  const imageDetails = parseImageName(nextImage.imageName, nextImage.absolutePath);
+
+  const imageDetails = await getImageDetails(nextImage.imageName, nextImage.absolutePath);
   if (imageDetails) {
     const postText = `The West Wing - ${parseInt(imageDetails.season, 10)}x${parseInt(imageDetails.episodeNumber, 10)} - ${imageDetails.episodeTitle} - Frame ${parseInt(imageDetails.frameNumber, 10)} of ${imageDetails.totalFramesInEpisode}`;
     const ocrText = await ocrSubtitlesTesseract(nextImage.absolutePath, { cropPercent: 0.26, maxLines: 4 });
