@@ -27,7 +27,7 @@ jobs:
             bin/
             .github/scripts/
 
-      - name: compare cache with live directory
+      - name: compare cache with live
         id: manifest
         env:
           GITHUB_API: https://api.github.com
@@ -70,7 +70,7 @@ jobs:
       - name: ensure image directory exists
         run: mkdir -p "${{ env.IMAGE_DIR }}"
 
-      - name: populate imagequeue
+      - name: no cache? populate imagequeue instead
         if: steps.cache.outputs.cache-hit != 'true'
         env:
           GITHUB_API: https://api.github.com
@@ -82,7 +82,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Cache miss or cache not found - downloading image list from GitHub contents API..."
+          echo "no cache - downloading image list..."
           resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" "${GITHUB_API}/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}")
           files=$(printf '%s' "$resp" | jq -r '.[] | select(.type=="file") | @base64')
           if [ -z "$files" ]; then
@@ -146,12 +146,13 @@ jobs:
           BSKY_IDENTIFIER: ${{ secrets.BSKY_IDENTIFIER }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
           LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
+        shell: bash
         run: |
           echo "starting with LAST_IMAGE_NAME: $LAST_IMAGE_NAME"
           CUR_LAST="$LAST_IMAGE_NAME"
           set +e
           for i in $(seq 1 5); do
-            echo "posting image #$i (using LAST_IMAGE_NAME=$CUR_LAST)"
+            # attempt to post up to 3 times per image
             SUCCESS=0
             for attempt in 1 2 3; do
               OUT=$(LAST_IMAGE_NAME="$CUR_LAST" yarn --silent start)
@@ -176,7 +177,7 @@ jobs:
               echo "error: posting attempt #$i failed after retries; stopping loop"
               break
             fi
-            echo "posted: $NEW_LINE"
+            # update CUR_LAST silently (no extra log line)
             CUR_LAST="$NEW_LINE"
             sleep 5
           done
