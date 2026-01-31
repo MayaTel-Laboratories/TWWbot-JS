@@ -8,7 +8,7 @@ env:
   IMAGE_DIR: imagequeue
   IMAGE_PATH_IN_REPO: imagequeue
   IMAGE_BRANCH: main
-  POSTS_PER_RUN: '5' 
+  POSTS_PER_RUN: '5'
 
 jobs:
   post-next-image:
@@ -49,6 +49,7 @@ jobs:
             echo "MANIFEST_JSON=" >> $GITHUB_OUTPUT
             exit 0
           fi
+
           manifest=$(printf '%s\n' "$resp" | jq -r '.[] | select(.type=="file") | "\(.path):\(.sha)"' | sort | tr '\n' '|' )
           if [ -z "$manifest" ]; then
             echo "MANIFEST_KEY=empty" >> $GITHUB_OUTPUT
@@ -101,14 +102,16 @@ jobs:
             echo "No manifest returned; nothing to download."
             exit 0
           fi
+
           sorted_file=$(mktemp)
-          python3 - <<'PY' > "${sorted_file}"
+          script_file=$(mktemp)
+          cat > "${script_file}" <<'PY'
 import sys, json, re
 data = json.load(sys.stdin)
 items = []
 pat = re.compile(r'^TWW_(\d+)x(\d{1,})_(.*?)__(\d+)\.(jpe?g|png|gif|bmp)$', re.I)
 for it in data:
-    if it.get('type') != 'file': 
+    if it.get('type') != 'file':
         continue
     name = it.get('name','')
     m = pat.match(name)
@@ -123,11 +126,15 @@ items.sort()
 for s,e,f,name,url in items:
     print(f"{s}\t{e}\t{f}\t{name}\t{url}")
 PY
-          printf '%s\n' "$resp" | python3 - "${sorted_file}" 2>/dev/null || true
+
+          printf '%s\n' "$resp" | python3 "${script_file}" > "${sorted_file}"
+
           if [ ! -s "${sorted_file}" ]; then
             echo "No TWW images found in manifest (after parsing)."
+            rm -f "${sorted_file}" "${script_file}"
             exit 0
           fi
+
           mapfile -t lines < "${sorted_file}"
           names=()
           urls=()
@@ -137,6 +144,9 @@ PY
             names+=("$name")
             urls+=("$url")
           done
+
+          rm -f "${sorted_file}" "${script_file}"
+
           start_index=0
           if [ -n "${LAST_IMAGE_NAME:-}" ]; then
             for i in "${!names[@]}"; do
@@ -145,9 +155,8 @@ PY
                 break
               fi
             done
-          else
-            start_index=0
           fi
+
           total=${#names[@]}
           if [ "$total" -eq 0 ]; then
             echo "No names available."
