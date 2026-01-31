@@ -16,17 +16,17 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v4
-      with:
-      fetch-depth: 1
-        sparse-checkout: |
-         package.json
-         yarn.lock
-         src
-         tsconfig.json
-         src/**/*.ts
-         lib
-         bin
-         .github/scripts/**
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            package.json
+            yarn.lock
+            src
+            tsconfig.json
+            src/**/*.ts
+            lib
+            bin
+            .github/scripts/**
 
       - name: compare cache with live directory
         id: manifest
@@ -132,7 +132,7 @@ jobs:
               if yarn install --immutable --immutable-cache; then
                 echo "yarn modern install succeeded with --immutable."
               else
-                echo "didn't work fucko."
+                echo "didn't work; falling back to normal install."
                 yarn install
               fi
             fi
