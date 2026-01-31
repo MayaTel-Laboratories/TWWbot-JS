@@ -52,16 +52,27 @@ async function countFramesFromGitHub(repo: string, imagePath: string, ref: strin
       const treeDataTry = await res.json();
       const treeTry = Array.isArray(treeDataTry?.tree) ? treeDataTry.tree : null;
       if (!treeTry) return null;
+
       const normalizedPath = imagePath.replace(/^\/+|\/+$/g, '');
       const prefix = normalizedPath.length ? `${normalizedPath}/` : '';
+      const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escapedPrefix = escapeRegex(episodePrefix);
+      const fileRegex = new RegExp('^' + escapedPrefix + '\\d+\\.jpeg$', 'i');
+
       let c = 0;
+      const sampleMatches: string[] = [];
       for (const entry of treeTry) {
         if (!entry || entry.type !== 'blob') continue;
         const fullPath = entry.path || '';
         if (!fullPath.startsWith(prefix)) continue;
-        const name = fullPath.slice(prefix.length);
-        if (name.startsWith(episodePrefix) && name.toLowerCase().endsWith('.jpeg')) c++;
+        const basename = fullPath.split('/').pop() || fullPath;
+        if (fileRegex.test(basename)) {
+          c++;
+          if (sampleMatches.length < 10) sampleMatches.push(basename);
+        }
       }
+      console.error(`countFramesFromGitHub (fallback-sha) treeEntries=${treeTry.length}, matches=${c}`);
+      if (sampleMatches.length) console.error('sample matches:', sampleMatches.join(', '));
       return c;
     }
 
@@ -70,25 +81,37 @@ async function countFramesFromGitHub(repo: string, imagePath: string, ref: strin
     if (!sha) return null;
     const treeUrl = `https://api.github.com/repos/${repo}/git/trees/${encodeURIComponent(sha)}?recursive=1`;
     res = await fetch(treeUrl, { headers });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error('countFramesFromGitHub: failed to fetch tree:', res.status, res.statusText);
+      return null;
+    }
     const treeData = await res.json();
     const tree = Array.isArray(treeData?.tree) ? treeData.tree : null;
     if (!tree) return null;
     const normalizedPath = imagePath.replace(/^\/+|\/+$/g, '');
     const prefix = normalizedPath.length ? `${normalizedPath}/` : '';
+    const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedPrefix = escapeRegex(episodePrefix);
+    const fileRegex = new RegExp('^' + escapedPrefix + '\\d+\\.jpeg$', 'i');
+
     let count = 0;
+    const sampleMatches: string[] = [];
     for (const entry of tree) {
       if (!entry || entry.type !== 'blob') continue;
       const fullPath = entry.path || '';
       if (!fullPath.startsWith(prefix)) continue;
-      const name = fullPath.slice(prefix.length);
-      if (name.startsWith(episodePrefix) && name.toLowerCase().endsWith('.jpeg')) {
+      const basename = fullPath.split('/').pop() || fullPath;
+      if (fileRegex.test(basename)) {
         count++;
+        if (sampleMatches.length < 10) sampleMatches.push(basename);
       }
     }
 
+    console.error(`countFramesFromGitHub: treeEntries=${tree.length}, matches=${count}, sha=${sha}`);
+    if (sampleMatches.length) console.error('sample matches:', sampleMatches.join(', '));
     return count;
   } catch (e) {
+    console.error('countFramesFromGitHub exception:', e);
     return null;
   }
 }
@@ -113,7 +136,6 @@ async function getImageDetails(imageName: string, absolutePath: string): Promise
       totalFramesInEpisode: manifestCount,
     };
   }
-
   const repo = process.env.GITHUB_REPOSITORY || '';
   const ref = process.env.IMAGE_BRANCH || process.env.GITHUB_REF?.replace(/^refs\/heads\//, '') || 'main';
   const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || undefined;
@@ -127,7 +149,6 @@ async function getImageDetails(imageName: string, absolutePath: string): Promise
       totalFramesInEpisode: apiCount,
     };
   }
-
   try {
     const directoryPath = path.dirname(absolutePath);
     const files = fs.readdirSync(directoryPath);
