@@ -104,10 +104,13 @@ jobs:
           fi
 
           sorted_file=$(mktemp)
-          # Use jq to extract name and download_url, then awk to parse TWW_... names, build a sortable key, sort numerically, and emit name/url pairs.
+
+          # Use jq to extract name and download_url, then awk (FS="\t") to parse TWW_... names,
+          # build a sortable key, sort numerically, and emit name/url pairs. Using FS="\t"
+          # preserves spaces in filenames.
           printf '%s\n' "$resp" \
             | jq -r '.[] | select(.type=="file") | "\(.name)\t\(.download_url)"' \
-            | awk 'BEGIN{IGNORECASE=1; OFS="\t"} \
+            | awk 'BEGIN{IGNORECASE=1; FS="\t"; OFS="\t"} \
                 { name=$1; url=$2; \
                   if (match(name, /^TWW_([0-9]+)x([0-9]+)_(.*)__([0-9]+)\.(jpe?g|png|gif|bmp)$/i, m)) { \
                     season=sprintf("%08d", m[1]); ep=sprintf("%08d", m[2]); frame=sprintf("%08d", m[4]); \
