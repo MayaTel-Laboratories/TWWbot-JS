@@ -21,12 +21,11 @@ jobs:
           sparse-checkout: |
             package.json
             yarn.lock
-            src
             tsconfig.json
-            src/**/*.ts
-            lib
-            bin
-            .github/scripts/**
+            src/
+            lib/
+            bin/
+            .github/scripts/
 
       - name: compare cache with live directory
         id: manifest
@@ -125,19 +124,19 @@ jobs:
             if grep -q '^# yarn lockfile v1' yarn.lock 2>/dev/null || grep -q '^# do not touch' yarn.lock 2>/dev/null; then
               echo "yarn classic time"
               corepack prepare yarn@1.22.19 --activate
-              yarn install --frozen-lockfile
+              yarn install --frozen-lockfile || (echo "::warning::yarn --frozen-lockfile failed; falling back to plain 'yarn install'"; yarn install)
             else
               echo "yarn stable time"
               corepack prepare yarn@stable --activate
               if yarn install --immutable --immutable-cache; then
                 echo "yarn modern install succeeded with --immutable."
               else
-                echo "didn't work; falling back to normal install."
+                echo "immutable failed; falling back to normal yarn install."
                 yarn install
               fi
             fi
           else
-            echo "no yarn.lock found, which means something really weird has happened.."
+            echo "no yarn.lock found"
             corepack prepare yarn@stable --activate
             yarn install
           fi
