@@ -273,6 +273,21 @@ async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: n
   }
 }
 
+function handleExit(delayMs = 150) {
+  setTimeout(() => {
+    process.exit(0);
+  }, delayMs);
+}
+
+process.on('unhandledRejection', (reason) => {
+  console.error('UnhandledRejection:', reason);
+  setTimeout(() => process.exit(1), 100);
+});
+process.on('uncaughtException', (err) => {
+  console.error('UncaughtException:', err);
+  setTimeout(() => process.exit(1), 100);
+});
+
 async function main() {
   const { LAST_IMAGE_NAME: lastImageName } = process.env;
   const nextImage = await getNextImage({ lastImageName });
@@ -291,9 +306,11 @@ async function main() {
     });
     console.error(`Status: Successfully posted to Bluesky`);
     console.log(nextImage.imageName);
+    setTimeout(() => process.exit(0), 150);
   } else {
     console.error(`Error: Could not parse image details from filename: ${nextImage.imageName}`);
     console.log(lastImageName || '');
+    setTimeout(() => process.exit(1), 150);
   }
 }
 
