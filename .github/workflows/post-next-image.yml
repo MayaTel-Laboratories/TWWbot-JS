@@ -16,8 +16,17 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+      with:
+      fetch-depth: 1
+        sparse-checkout: |
+         package.json
+         yarn.lock
+         src
+         tsconfig.json
+         src/**/*.ts
+         lib
+         bin
+         .github/scripts/**
 
       - name: compare cache with live directory
         id: manifest
@@ -100,35 +109,35 @@ jobs:
             curl -sSfL -o "$outpath" "$url"
           done
 
-      - name: Use Node.js (with Yarn cache)
+      - name: Use Node.js
         uses: actions/setup-node@v3
         with:
           node-version: 20
           cache: 'yarn'
           cache-dependency-path: '**/yarn.lock'
 
-      - name: Install dependencies (choose correct Yarn variant)
+      - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
           corepack enable
           if [ -f yarn.lock ]; then
             if grep -q '^# yarn lockfile v1' yarn.lock 2>/dev/null || grep -q '^# do not touch' yarn.lock 2>/dev/null; then
-              echo "Detected Yarn Classic (v1) lockfile. Activating Yarn classic (1.22.x)..."
+              echo "yarn classic time"
               corepack prepare yarn@1.22.19 --activate
               yarn install --frozen-lockfile
             else
-              echo "Detected Yarn Berry/modern lockfile. Activating Yarn stable..."
+              echo "yarn stable time"
               corepack prepare yarn@stable --activate
               if yarn install --immutable --immutable-cache; then
-                echo "Yarn modern install succeeded with --immutable."
+                echo "yarn modern install succeeded with --immutable."
               else
-                echo "Immutable install failed; falling back to plain yarn install (will allow lockfile changes)."
+                echo "didn't work fucko."
                 yarn install
               fi
             fi
           else
-            echo "No yarn.lock found; activating Yarn stable and running install."
+            echo "no yarn.lock found, which means something really weird has happened.."
             corepack prepare yarn@stable --activate
             yarn install
           fi
