@@ -1,6 +1,6 @@
 name: 'TWWBot-JS Post Next Image'
 on:
-  workflow_dispatch:
+  #workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"
 
@@ -213,12 +213,12 @@ jobs:
             corepack prepare yarn@stable --activate
             yarn install
           fi
-
       - name: Do the posts
         env:
           BSKY_IDENTIFIER: ${{ secrets.BSKY_IDENTIFIER }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
           LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
+          MANIFEST_JSON: ${{ steps.manifest.outputs.MANIFEST_JSON }}
         shell: bash
         run: |
           echo "starting with LAST_IMAGE_NAME: $LAST_IMAGE_NAME"
