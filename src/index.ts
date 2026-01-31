@@ -16,26 +16,68 @@ interface ImageDetails {
   totalFramesInEpisode: number;
 }
 
+function countFramesFromManifest(manifestPath: string | undefined, episodePrefix: string): number | null {
+  if (!manifestPath) return null;
+  try {
+    if (!fs.existsSync(manifestPath)) return null;
+    const raw = fs.readFileSync(manifestPath, 'utf8');
+    if (!raw) return null;
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return null;
+    let count = 0;
+    for (const it of arr) {
+      const name = (it && (it.name || it.path)) ? (it.name || it.path) : '';
+      if (!name) continue;
+      if (name.startsWith(episodePrefix) && name.toLowerCase().endsWith('.jpeg')) count++;
+    }
+    return count;
+  } catch (e) {
+    return null;
+  }
+}
+
 function parseImageName(imageName: string, absolutePath: string): ImageDetails | null {
-  const matchResult = imageName.match(/^TWW_(\d)x(\d{2})_(.*)__(\d+)\.jpeg$/);
+  const matchResult = imageName.match(/^TWW_(\d+)x(\d{1,})_(.*)__(\d+)\.jpeg$/i);
   if (matchResult) {
     const season = matchResult[1];
     const episodeNumber = matchResult[2];
     const episodeTitle = matchResult[3];
     const frameNumber = matchResult[4];
-    const directoryPath = path.dirname(absolutePath);
-    const files = fs.readdirSync(directoryPath);
     const episodePrefix = `TWW_${season}x${episodeNumber}_${episodeTitle}__`;
-    const totalFrames = files.filter(file =>
-      file.startsWith(episodePrefix) && file.endsWith('.jpeg')
-    ).length;
-    return {
-      season,
-      episodeNumber,
-      episodeTitle,
-      frameNumber,
-      totalFramesInEpisode: totalFrames,
-    };
+    const manifestPath = process.env.MANIFEST_JSON;
+    const manifestCount = countFramesFromManifest(manifestPath, episodePrefix);
+    if (manifestCount !== null) {
+      return {
+        season,
+        episodeNumber,
+        episodeTitle,
+        frameNumber,
+        totalFramesInEpisode: manifestCount,
+      };
+    }
+
+    try {
+      const directoryPath = path.dirname(absolutePath);
+      const files = fs.readdirSync(directoryPath);
+      const totalFrames = files.filter(file =>
+        file.startsWith(episodePrefix) && file.toLowerCase().endsWith('.jpeg')
+      ).length;
+      return {
+        season,
+        episodeNumber,
+        episodeTitle,
+        frameNumber,
+        totalFramesInEpisode: totalFrames,
+      };
+    } catch (e) {
+      return {
+        season,
+        episodeNumber,
+        episodeTitle,
+        frameNumber,
+        totalFramesInEpisode: 0,
+      };
+    }
   }
   return null;
 }
