@@ -81,11 +81,20 @@ jobs:
             echo "No files found in ${IMAGE_PATH} at ${REF}."
             exit 0
           fi
-          echo "$resp" | jq -r '.[] | select(.type=="file") | "\(.name)\t\(.download_url)\t\(.sha)"' | while IFS=$'\t' read -r name url sha; do
+          echo "$resp" | jq -r '.[] | select(.type=="file") | "\(.name)\t\(.download_url)\t\(.size)\t\(.sha)"' | while IFS=$'\t' read -r name url size sha; do
             outpath="${IMAGE_DIR}/${name}"
             if [ -f "$outpath" ]; then
-              echo "Skipping existing $outpath (already present)"
-              continue
+              if stat --version >/dev/null 2>&1; then
+                local_size=$(stat -c%s "$outpath")
+              else
+                local_size=$(stat -f%z "$outpath")
+              fi
+              if [ "$local_size" -eq "$size" ]; then
+                echo "Skipping existing $outpath (size matches)"
+                continue
+              else
+                echo "$name exists but size differs (local=$local_size remote=$size), re-downloading"
+              fi
             fi
             echo "Downloading $name ..."
             curl -sSfL -o "$outpath" "$url"
@@ -98,11 +107,31 @@ jobs:
           cache: 'yarn'
           cache-dependency-path: '**/yarn.lock'
 
-      - name: Install dependencies
+      - name: Install dependencies (choose correct Yarn variant)
+        shell: bash
         run: |
+          set -euo pipefail
           corepack enable
-          corepack prepare yarn@stable --activate
-          yarn install --frozen-lockfile
+          if [ -f yarn.lock ]; then
+            if grep -q '^# yarn lockfile v1' yarn.lock 2>/dev/null || grep -q '^# don't edit this.' yarn.lock 2>/dev/null; then
+              echo "Detected Yarn Classic (v1) lockfile. Activating Yarn classic (1.22.x)..."
+              corepack prepare yarn@1.22.19 --activate
+              yarn install --frozen-lockfile
+            else
+              echo "Detected Yarn Berry/modern lockfile. Activating Yarn stable..."
+              corepack prepare yarn@stable --activate
+              if yarn install --immutable --immutable-cache; then
+                echo "Yarn modern install succeeded with --immutable."
+              else
+                echo "Immutable install failed; falling back to plain yarn install (will allow lockfile changes)."
+                yarn install
+              fi
+            fi
+          else
+            echo "No yarn.lock found; activating Yarn stable and running install."
+            corepack prepare yarn@stable --activate
+            yarn install
+          fi
 
       - name: Do the posts
         env:
