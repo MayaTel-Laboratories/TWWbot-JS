@@ -236,7 +236,7 @@ async function ocrSubtitlesTesseract(imagePath: string, opts?: { cropPercent?: n
       bufA = fullBuf;
       bufB = fullBuf;
     }
-    worker = createWorker({});
+    worker = await createWorker({});
     await worker.loadLanguage('eng');
     await worker.initialize('eng');
     await worker.setParameters({
