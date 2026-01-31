@@ -8,13 +8,14 @@ env:
   IMAGE_DIR: imagequeue
   IMAGE_PATH_IN_REPO: imagequeue
   IMAGE_BRANCH: main
+  POSTS_PER_RUN: '5' 
 
 jobs:
   post-next-image:
     name: Post Next Image
     runs-on: ubuntu-latest
     steps:
-      - name: checkout
+      - name: checkout (sparse)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
@@ -27,7 +28,7 @@ jobs:
             bin/
             .github/scripts/
 
-      - name: compare cache with live
+      - name: compute image manifest (files + sha)
         id: manifest
         env:
           GITHUB_API: https://api.github.com
@@ -40,71 +41,145 @@ jobs:
           set -euo pipefail
           echo "Querying GitHub for files in ${IMAGE_PATH} at ref ${REF}..."
           resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
-            "${GITHUB_API}/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}" )
-          if [ -z "$resp" ]; then
+            "${GITHUB_API}/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}")
+
+          if [ -z "$resp" ] || [ "$(printf '%s' "$resp" | jq -r 'type')" = "null" ]; then
             echo "noresp=true" >> $GITHUB_OUTPUT
             echo "MANIFEST_KEY=disk-empty" >> $GITHUB_OUTPUT
+            echo "MANIFEST_JSON=" >> $GITHUB_OUTPUT
             exit 0
           fi
           manifest=$(printf '%s\n' "$resp" | jq -r '.[] | select(.type=="file") | "\(.path):\(.sha)"' | sort | tr '\n' '|' )
           if [ -z "$manifest" ]; then
             echo "MANIFEST_KEY=empty" >> $GITHUB_OUTPUT
             echo "no_files=true" >> $GITHUB_OUTPUT
+            echo "MANIFEST_JSON=" >> $GITHUB_OUTPUT
             exit 0
           fi
+
           manifest_hash=$(printf '%s' "$manifest" | sha1sum | awk '{print $1}')
-          key="imagequeue-${{ runner.os }}-${manifest_hash}"
+          key="imagequeue-manifest-${{ runner.os }}-${manifest_hash}"
+          mkdir -p .image-manifest
+          printf '%s\n' "$resp" > .image-manifest/manifest.json
+
           echo "MANIFEST=$manifest" >> $GITHUB_OUTPUT
           echo "MANIFEST_KEY=$key" >> $GITHUB_OUTPUT
+          echo "MANIFEST_JSON=.image-manifest/manifest.json" >> $GITHUB_OUTPUT
           echo "manifest_length=$(printf '%s' "$manifest" | wc -c)" >> $GITHUB_OUTPUT
 
-      - name: restore imagequeue cache
+      - name: cache small manifest metadata
         uses: actions/cache@v4
-        id: cache
         with:
-          path: ${{ env.IMAGE_DIR }}
+          path: .image-manifest
           key: ${{ steps.manifest.outputs.MANIFEST_KEY }}
           restore-keys: |
-            imagequeue-${{ runner.os }}-
+            imagequeue-manifest-${{ runner.os }}-
 
       - name: ensure image directory exists
         run: mkdir -p "${{ env.IMAGE_DIR }}"
 
-      - name: no cache? populate imagequeue instead
-        if: steps.cache.outputs.cache-hit != 'true'
+      - name: download only next images (deterministic numeric order)
         env:
-          GITHUB_API: https://api.github.com
+          POSTS_PER_RUN: ${{ env.POSTS_PER_RUN }}
+          IMAGE_DIR: ${{ env.IMAGE_DIR }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           REF: ${{ env.IMAGE_BRANCH }}
           IMAGE_PATH: ${{ env.IMAGE_PATH_IN_REPO }}
-          IMAGE_DIR: ${{ env.IMAGE_DIR }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
         shell: bash
         run: |
           set -euo pipefail
-          echo "no cache - downloading image list..."
-          resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" "${GITHUB_API}/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}")
-          files=$(printf '%s' "$resp" | jq -r '.[] | select(.type=="file") | @base64')
-          if [ -z "$files" ]; then
-            echo "No files found in ${IMAGE_PATH} at ${REF}."
+          N=${POSTS_PER_RUN:-5}
+          mkdir -p "${IMAGE_DIR}"
+
+          echo "Fetching manifest from API..."
+          resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
+            "https://api.github.com/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}")
+
+          if [ -z "$resp" ]; then
+            echo "No manifest returned; nothing to download."
             exit 0
           fi
-          echo "$resp" | jq -r '.[] | select(.type=="file") | "\(.name)\t\(.download_url)\t\(.size)\t\(.sha)"' | while IFS=$'\t' read -r name url size sha; do
+          sorted_file=$(mktemp)
+          python3 - <<'PY' > "${sorted_file}"
+import sys, json, re
+data = json.load(sys.stdin)
+items = []
+pat = re.compile(r'^TWW_(\d+)x(\d{1,})_(.*?)__(\d+)\.(jpe?g|png|gif|bmp)$', re.I)
+for it in data:
+    if it.get('type') != 'file': 
+        continue
+    name = it.get('name','')
+    m = pat.match(name)
+    if not m:
+        continue
+    season = int(m.group(1))
+    episode = int(m.group(2))
+    frame = int(m.group(4))
+    url = it.get('download_url','')
+    items.append((season, episode, frame, name, url))
+items.sort()
+for s,e,f,name,url in items:
+    print(f"{s}\t{e}\t{f}\t{name}\t{url}")
+PY
+          printf '%s\n' "$resp" | python3 - "${sorted_file}" 2>/dev/null || true
+          if [ ! -s "${sorted_file}" ]; then
+            echo "No TWW images found in manifest (after parsing)."
+            exit 0
+          fi
+          mapfile -t lines < "${sorted_file}"
+          names=()
+          urls=()
+          for l in "${lines[@]}"; do
+            name=$(printf '%s' "$l" | awk -F $'\t' '{print $4}')
+            url=$(printf '%s' "$l" | awk -F $'\t' '{print $5}')
+            names+=("$name")
+            urls+=("$url")
+          done
+          start_index=0
+          if [ -n "${LAST_IMAGE_NAME:-}" ]; then
+            for i in "${!names[@]}"; do
+              if [ "${names[i]}" = "${LAST_IMAGE_NAME}" ]; then
+                start_index=$((i + 1))
+                break
+              fi
+            done
+          else
+            start_index=0
+          fi
+          total=${#names[@]}
+          if [ "$total" -eq 0 ]; then
+            echo "No names available."
+            exit 0
+          fi
+
+          to_download=()
+          to_download_urls=()
+          idx=$start_index
+          for cnt in $(seq 1 "$N"); do
+            if [ "$idx" -ge "$total" ]; then
+              idx=0
+            fi
+            to_download+=("${names[idx]}")
+            to_download_urls+=("${urls[idx]}")
+            idx=$((idx + 1))
+          done
+
+          echo "will download ${#to_download[@]} images (next ${N})."
+          for i in "${!to_download[@]}"; do
+            name="${to_download[i]}"
+            url="${to_download_urls[i]}"
             outpath="${IMAGE_DIR}/${name}"
             if [ -f "$outpath" ]; then
-              if stat --version >/dev/null 2>&1; then
-                local_size=$(stat -c%s "$outpath")
-              else
-                local_size=$(stat -f%z "$outpath")
-              fi
-              if [ "$local_size" -eq "$size" ]; then
-                echo "Skipping existing $outpath (size matches)"
-                continue
-              else
-                echo "$name exists but size differs (local=$local_size remote=$size), re-downloading"
-              fi
+              echo "Skipping existing ${name}"
+              continue
             fi
-            echo "Downloading $name ..."
+            if [ -z "$url" ]; then
+              echo "No download URL for ${name}; skipping."
+              continue
+            fi
+            echo "Downloading ${name} ..."
             curl -sSfL -o "$outpath" "$url"
           done
 
@@ -122,21 +197,17 @@ jobs:
           corepack enable
           if [ -f yarn.lock ]; then
             if grep -q '^# yarn lockfile v1' yarn.lock 2>/dev/null || grep -q '^# do not touch' yarn.lock 2>/dev/null; then
-              echo "yarn classic time"
               corepack prepare yarn@1.22.19 --activate
               yarn install --frozen-lockfile || (echo "::warning::yarn --frozen-lockfile failed; falling back to plain 'yarn install'"; yarn install)
             else
-              echo "yarn stable time"
               corepack prepare yarn@stable --activate
               if yarn install --immutable --immutable-cache; then
                 echo "yarn modern install succeeded with --immutable."
               else
-                echo "immutable failed; falling back to normal yarn install."
                 yarn install
               fi
             fi
           else
-            echo "no yarn.lock found"
             corepack prepare yarn@stable --activate
             yarn install
           fi
@@ -152,7 +223,6 @@ jobs:
           CUR_LAST="$LAST_IMAGE_NAME"
           set +e
           for i in $(seq 1 5); do
-            # attempt to post up to 3 times per image
             SUCCESS=0
             for attempt in 1 2 3; do
               OUT=$(LAST_IMAGE_NAME="$CUR_LAST" yarn --silent start)
@@ -177,7 +247,6 @@ jobs:
               echo "error: posting attempt #$i failed after retries; stopping loop"
               break
             fi
-            # update CUR_LAST silently (no extra log line)
             CUR_LAST="$NEW_LINE"
             sleep 5
           done
