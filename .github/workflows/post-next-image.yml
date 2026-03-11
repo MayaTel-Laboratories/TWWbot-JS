@@ -1,6 +1,6 @@
 name: 'TWWBot-JS Post Next Image'
 on:
-  #workflow_dispatch:
+  workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"
 
@@ -39,14 +39,24 @@ jobs:
         run: |
           set -euo pipefail
           echo "Querying GitHub for files in ${IMAGE_PATH} at ref ${REF}..."
-          resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
-            "${GITHUB_API}/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}" )
-          if [ -z "$resp" ]; then
+          branch_data=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
+            "${GITHUB_API}/repos/${REPO}/branches/${REF}")
+          tree_sha=$(printf '%s' "$branch_data" | jq -r '.commit.sha')
+          if [ -z "$tree_sha" ] || [ "$tree_sha" = "null" ]; then
             echo "noresp=true" >> $GITHUB_OUTPUT
             echo "MANIFEST_KEY=disk-empty" >> $GITHUB_OUTPUT
             exit 0
           fi
-          manifest=$(printf '%s\n' "$resp" | jq -r '.[] | select(.type=="file") | "\(.path):\(.sha)"' | sort | tr '\n' '|' )
+          resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
+            "${GITHUB_API}/repos/${REPO}/git/trees/${tree_sha}?recursive=1")
+          truncated=$(printf '%s' "$resp" | jq -r '.truncated')
+          if [ "$truncated" = "true" ]; then
+            echo "::warning::Git tree response was truncated — some files may be missing!"
+          fi
+          manifest=$(printf '%s' "$resp" \
+            | jq -r --arg prefix "${IMAGE_PATH}/" \
+              '.tree[] | select(.type=="blob") | select(.path | startswith($prefix)) | "\(.path):\(.sha)"' \
+            | sort | tr '\n' '|')
           if [ -z "$manifest" ]; then
             echo "MANIFEST_KEY=empty" >> $GITHUB_OUTPUT
             echo "no_files=true" >> $GITHUB_OUTPUT
@@ -82,30 +92,39 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Cache miss - downloading image list from GitHub contents API..."
-          resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" "${GITHUB_API}/repos/${REPO}/contents/${IMAGE_PATH}?ref=${REF}")
-          files=$(printf '%s' "$resp" | jq -r '.[] | select(.type=="file") | @base64')
+          echo "Cache miss - downloading image list from GitHub Trees API..."
+          branch_data=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
+            "${GITHUB_API}/repos/${REPO}/branches/${REF}")
+          tree_sha=$(printf '%s' "$branch_data" | jq -r '.commit.sha')
+          if [ -z "$tree_sha" ] || [ "$tree_sha" = "null" ]; then
+            echo "No tree SHA found, exiting."
+            exit 0
+          fi
+          resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
+            "${GITHUB_API}/repos/${REPO}/git/trees/${tree_sha}?recursive=1")
+          truncated=$(printf '%s' "$resp" | jq -r '.truncated')
+          if [ "$truncated" = "true" ]; then
+            echo "::warning::Git tree response was truncated — some files may be missing!"
+          fi
+          files=$(printf '%s' "$resp" \
+            | jq -r --arg prefix "${IMAGE_PATH}/" \
+              '.tree[] | select(.type=="blob") | select(.path | startswith($prefix)) | .path')
           if [ -z "$files" ]; then
             echo "No files found in ${IMAGE_PATH} at ${REF}."
             exit 0
           fi
-          echo "$resp" | jq -r '.[] | select(.type=="file") | "\(.name)\t\(.download_url)\t\(.size)\t\(.sha)"' | while IFS=$'\t' read -r name url size sha; do
+          echo "$files" | while IFS= read -r filepath; do
+            name=$(basename "$filepath")
             outpath="${IMAGE_DIR}/${name}"
             if [ -f "$outpath" ]; then
-              if stat --version >/dev/null 2>&1; then
-                local_size=$(stat -c%s "$outpath")
-              else
-                local_size=$(stat -f%z "$outpath")
-              fi
-              if [ "$local_size" -eq "$size" ]; then
-                echo "Skipping existing $outpath (size matches)"
-                continue
-              else
-                echo "$name exists but size differs (local=$local_size remote=$size), re-downloading"
-              fi
+              echo "Skipping existing $outpath"
+              continue
             fi
             echo "Downloading $name ..."
-            curl -sSfL -o "$outpath" "$url"
+            curl -sSfL \
+              -H "Authorization: token ${GH_TOKEN}" \
+              -o "$outpath" \
+              "https://raw.githubusercontent.com/${REPO}/${REF}/${filepath}"
           done
 
       - name: Use Node.js
