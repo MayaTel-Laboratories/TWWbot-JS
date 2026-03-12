@@ -39,29 +39,38 @@ jobs:
         run: |
           set -euo pipefail
           echo "Querying GitHub for files in ${IMAGE_PATH} at ref ${REF}..."
-          branch_data=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
+
+          # Get commit SHA for the branch
+          branch_data=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/branches/${REF}")
           tree_sha=$(printf '%s' "$branch_data" | jq -r '.commit.sha')
+
           if [ -z "$tree_sha" ] || [ "$tree_sha" = "null" ]; then
             echo "noresp=true" >> $GITHUB_OUTPUT
             echo "MANIFEST_KEY=disk-empty" >> $GITHUB_OUTPUT
             exit 0
           fi
-          resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
+
+          # List all files via Git Trees API (avoids 1000-file limit)
+          resp=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/git/trees/${tree_sha}?recursive=1")
+
           truncated=$(printf '%s' "$resp" | jq -r '.truncated')
           if [ "$truncated" = "true" ]; then
             echo "::warning::Git tree response was truncated — some files may be missing!"
           fi
+
           manifest=$(printf '%s' "$resp" \
             | jq -r --arg prefix "${IMAGE_PATH}/" \
               '.tree[] | select(.type=="blob") | select(.path | startswith($prefix)) | "\(.path):\(.sha)"' \
             | sort | tr '\n' '|')
+
           if [ -z "$manifest" ]; then
             echo "MANIFEST_KEY=empty" >> $GITHUB_OUTPUT
             echo "no_files=true" >> $GITHUB_OUTPUT
             exit 0
           fi
+
           manifest_hash=$(printf '%s' "$manifest" | sha1sum | awk '{print $1}')
           key="imagequeue-${{ runner.os }}-${manifest_hash}"
           echo "MANIFEST=$manifest" >> $GITHUB_OUTPUT
@@ -93,38 +102,53 @@ jobs:
         run: |
           set -euo pipefail
           echo "Cache miss - downloading image list from GitHub Trees API..."
-          branch_data=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
+
+          # Get commit SHA for the branch
+          branch_data=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/branches/${REF}")
           tree_sha=$(printf '%s' "$branch_data" | jq -r '.commit.sha')
+
           if [ -z "$tree_sha" ] || [ "$tree_sha" = "null" ]; then
             echo "No tree SHA found, exiting."
             exit 0
           fi
-          resp=$(curl -s -H "Authorization: token ${GH_TOKEN}" \
+
+          # List all files via Git Trees API (avoids 1000-file limit)
+          resp=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/git/trees/${tree_sha}?recursive=1")
+
           truncated=$(printf '%s' "$resp" | jq -r '.truncated')
           if [ "$truncated" = "true" ]; then
             echo "::warning::Git tree response was truncated — some files may be missing!"
           fi
+
           files=$(printf '%s' "$resp" \
             | jq -r --arg prefix "${IMAGE_PATH}/" \
               '.tree[] | select(.type=="blob") | select(.path | startswith($prefix)) | .path')
+
           if [ -z "$files" ]; then
             echo "No files found in ${IMAGE_PATH} at ${REF}."
             exit 0
           fi
+
           echo "$files" | while IFS= read -r filepath; do
             name=$(basename "$filepath")
             outpath="${IMAGE_DIR}/${name}"
+
             if [ -f "$outpath" ]; then
               echo "Skipping existing $outpath"
               continue
             fi
+
             echo "Downloading $name ..."
+
+            # URL-encode the path so curl doesn't fail on spaces/special chars
+            encoded_path=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$filepath")
+
             curl -sSfL \
               -H "Authorization: token ${GH_TOKEN}" \
               -o "$outpath" \
-              "https://raw.githubusercontent.com/${REPO}/${REF}/${filepath}"
+              "https://raw.githubusercontent.com/${REPO}/${REF}/${encoded_path}"
           done
 
       - name: Use Node.js
