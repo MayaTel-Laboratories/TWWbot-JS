@@ -1,8 +1,6 @@
 name: 'TWWBot-JS Post Next Image'
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "*/5 * * * *"
 
 env:
   IMAGE_DIR: imagequeue
