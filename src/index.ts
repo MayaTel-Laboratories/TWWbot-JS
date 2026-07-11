@@ -207,7 +207,10 @@ async function main() {
   const imageDetails = await getImageDetails(nextImage.imageName, nextImage.absolutePath);
   if (imageDetails) {
     const postText = `The West Wing - ${parseInt(imageDetails.season, 10)}x${parseInt(imageDetails.episodeNumber, 10)} - ${imageDetails.episodeTitle} - Frame ${parseInt(imageDetails.frameNumber, 10)} of ${imageDetails.totalFramesInEpisode}`;
-    const subtitleText = getSubtitleFromManifest(process.env.MANIFEST_JSON, nextImage.imageName);
+    const frameNum = parseInt(imageDetails.frameNumber, 10);
+    const adjustedFrameNum = frameNum - 1;
+    const adjustedImageName = nextImage.imageName.replace(/__\d+\.jpeg$/, `__${String(adjustedFrameNum).padStart(4, '0')}.jpeg`);
+    const subtitleText = getSubtitleFromManifest(process.env.MANIFEST_JSON, adjustedImageName);
     console.error(`Manifest path: ${process.env.MANIFEST_JSON}`);
     console.error(`Image name: ${nextImage.imageName}`);
     console.error(`Subtitle found: ${subtitleText}`);
