@@ -20,8 +20,9 @@ function countFramesFromManifest(manifestPath: string | undefined, season: strin
     if (!fs.existsSync(manifestPath)) return null;
     const raw = fs.readFileSync(manifestPath, 'utf8');
     if (!raw) return null;
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return null;
+    const data = JSON.parse(raw);
+    const arr = Array.isArray(data) ? data : Array.isArray(data.frames) ? data.frames : null;
+    if (!arr) return null;
 
     const fileRegex = new RegExp(`^TWW_${season}x${episode}_.+__\\d+\\.jpeg$`, 'i');
     let count = 0;
@@ -42,8 +43,9 @@ function getSubtitleFromManifest(manifestPath: string | undefined, filename: str
     if (!fs.existsSync(manifestPath)) return null;
     const raw = fs.readFileSync(manifestPath, 'utf8');
     if (!raw) return null;
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return null;
+    const data = JSON.parse(raw);
+    const arr = Array.isArray(data) ? data : Array.isArray(data.frames) ? data.frames : null;
+    if (!arr) return null;
 
     const entry = arr.find((it: any) => it && (it.name || it.path) === filename);
     if (!entry) return null;
