@@ -2,9 +2,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parseSrt, findCueAtTime, toReadableCase, SrtCue } from './parseSrt';
 
-interface ManifestEntry {
+interface FrameEntry {
   name: string;
   subtitleText: string | null;
+}
+
+interface Manifest {
+  frames: FrameEntry[];
+  episodeTotals: Record<string, number>;
 }
 
 function parseArgs(argv: string[]): Record<string, string> {
@@ -30,6 +35,27 @@ function seasonEpisodeFromSrtFilename(filename: string): { season: string; episo
   return { season: m[1], episode: m[2] };
 }
 
+function loadManifest(manifestPath: string): Manifest {
+  if (!fs.existsSync(manifestPath)) {
+    return { frames: [], episodeTotals: {} };
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (Array.isArray(parsed)) {
+      return { frames: parsed, episodeTotals: {} };
+    }
+    if (parsed && typeof parsed === 'object') {
+      return {
+        frames: Array.isArray(parsed.frames) ? parsed.frames : [],
+        episodeTotals: parsed.episodeTotals && typeof parsed.episodeTotals === 'object' ? parsed.episodeTotals : {},
+      };
+    }
+  } catch {
+    console.error(`Warning: could not parse existing manifest at ${manifestPath}, starting fresh`);
+  }
+  return { frames: [], episodeTotals: {} };
+}
+
 function processEpisode(
   srtPath: string,
   season: string,
@@ -37,7 +63,7 @@ function processEpisode(
   imagesDir: string,
   caseMode: 'raw' | 'readable',
   frameOffsetSeconds: number,
-): ManifestEntry[] {
+): { entries: FrameEntry[]; episodeKey: string; observedCount: number } {
   const srtRaw = fs.readFileSync(srtPath, 'utf8');
   const cues: SrtCue[] = parseSrt(srtRaw);
   console.error(`  Parsed ${cues.length} subtitle cues from ${path.basename(srtPath)}`);
@@ -46,16 +72,17 @@ function processEpisode(
   }
 
   const episodePadded = episode.padStart(2, '0');
+  const episodeKey = `${season}x${episodePadded}`;
   const fileRegex = new RegExp(`^TWW_${season}x${episodePadded}_.+__\\d+\\.jpeg$`, 'i');
   const allFiles = fs.readdirSync(imagesDir).filter(f => fileRegex.test(f));
 
   if (allFiles.length === 0) {
     console.error(`  No frame files matched pattern for season ${season} episode ${episodePadded} in ${imagesDir} — skipping.`);
-    return [];
+    return { entries: [], episodeKey, observedCount: 0 };
   }
 
   let matched = 0;
-  const entries: ManifestEntry[] = [];
+  const entries: FrameEntry[] = [];
   for (const filename of allFiles) {
     const frameNumber = frameNumberFromFilename(filename);
     if (frameNumber === null) continue;
@@ -69,8 +96,8 @@ function processEpisode(
     entries.push({ name: filename, subtitleText });
   }
 
-  console.error(`  Matched subtitle text to ${matched} / ${allFiles.length} frames for ${season}x${episodePadded}`);
-  return entries;
+  console.error(`  Matched subtitle text to ${matched} / ${allFiles.length} frames for ${episodeKey}`);
+  return { entries, episodeKey, observedCount: allFiles.length };
 }
 
 function main() {
@@ -121,35 +148,51 @@ function main() {
 
   console.error(`Processing ${jobs.length} episode(s)...`);
 
-  let existing: ManifestEntry[] = [];
-  if (fs.existsSync(manifestPath)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      if (Array.isArray(parsed)) existing = parsed;
-    } catch {
-      console.error(`Warning: could not parse existing manifest at ${manifestPath}, starting fresh`);
-    }
-  }
+  const manifest = loadManifest(manifestPath);
 
-  let allNewEntries: ManifestEntry[] = [];
+  let allNewEntries: FrameEntry[] = [];
   const episodeRegexes: RegExp[] = [];
 
   for (const job of jobs) {
     const episodePadded = job.episode.padStart(2, '0');
     console.error(`\n${job.season}x${episodePadded} — ${path.basename(job.srtPath)}`);
     episodeRegexes.push(new RegExp(`^TWW_${job.season}x${episodePadded}_.+__\\d+\\.jpeg$`, 'i'));
-    const entries = processEpisode(job.srtPath, job.season, job.episode, imagesDir, caseMode, frameOffsetSeconds);
+
+    const { entries, episodeKey, observedCount } = processEpisode(
+      job.srtPath,
+      job.season,
+      job.episode,
+      imagesDir,
+      caseMode,
+      frameOffsetSeconds,
+    );
     allNewEntries = allNewEntries.concat(entries);
+
+    if (observedCount > 0) {
+      const previousTotal = manifest.episodeTotals[episodeKey] || 0;
+      const newTotal = Math.max(previousTotal, observedCount);
+      if (previousTotal > 0 && observedCount < previousTotal) {
+        console.error(
+          `  Note: this run only found ${observedCount} frame(s) for ${episodeKey}, fewer than the ` +
+            `previously recorded total of ${previousTotal} — keeping ${previousTotal} (frames were ` +
+            `probably pruned since the last run; the total never gets lowered automatically).`,
+        );
+      }
+      manifest.episodeTotals[episodeKey] = newTotal;
+    }
   }
 
-  const retained = existing.filter((e: any) => {
+  const retainedFrames = manifest.frames.filter((e: any) => {
     const name = e && e.name ? e.name : '';
     return !episodeRegexes.some(re => re.test(name));
   });
-  const merged = [...retained, ...allNewEntries];
+  manifest.frames = [...retainedFrames, ...allNewEntries];
 
-  fs.writeFileSync(manifestPath, JSON.stringify(merged, null, 2), 'utf8');
-  console.error(`\nWrote ${merged.length} total entries to ${manifestPath} (${allNewEntries.length} new/updated across ${jobs.length} episode(s))`);
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+  console.error(
+    `\nWrote ${manifest.frames.length} frame entries and ${Object.keys(manifest.episodeTotals).length} ` +
+      `episode total(s) to ${manifestPath} (${allNewEntries.length} frame entries new/updated across ${jobs.length} episode(s))`,
+  );
 }
 
 main();
