@@ -40,7 +40,6 @@ jobs:
           set -euo pipefail
           echo "Querying GitHub for files in ${IMAGE_PATH} at ref ${REF}..."
 
-          # Get commit SHA for the branch
           branch_data=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/branches/${REF}")
           tree_sha=$(printf '%s' "$branch_data" | jq -r '.commit.sha')
@@ -51,7 +50,6 @@ jobs:
             exit 0
           fi
 
-          # List all files via Git Trees API (avoids 1000-file limit)
           resp=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/git/trees/${tree_sha}?recursive=1")
 
@@ -103,7 +101,6 @@ jobs:
           set -euo pipefail
           echo "Cache miss - downloading image list from GitHub Trees API..."
 
-          # Get commit SHA for the branch
           branch_data=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/branches/${REF}")
           tree_sha=$(printf '%s' "$branch_data" | jq -r '.commit.sha')
@@ -113,7 +110,6 @@ jobs:
             exit 0
           fi
 
-          # List all files via Git Trees API (avoids 1000-file limit)
           resp=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/git/trees/${tree_sha}?recursive=1")
 
@@ -142,7 +138,6 @@ jobs:
 
             echo "Downloading $name ..."
 
-            # URL-encode the path so curl doesn't fail on spaces/special chars
             encoded_path=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$filepath")
 
             curl -sSfL \
@@ -152,9 +147,9 @@ jobs:
           done
 
       - name: Use Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: 'yarn'
           cache-dependency-path: '**/yarn.lock'
 
