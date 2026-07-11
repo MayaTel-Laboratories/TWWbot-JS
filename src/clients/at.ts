@@ -72,7 +72,7 @@ async function postImage({ path, text, altText }: PostImageOptions) {
   });
   const { data, buffer } = await loadImageData(path);
   const dimensions = sizeOf(buffer);
-  const testUpload = await agent.uploadBlob(data, { encoding: 'image/jpg' });
+  const testUpload = await agent.uploadBlob(data, { encoding: 'image/jpeg' });
   await agent.post({
     text: text,
     embed: {

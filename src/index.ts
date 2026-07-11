@@ -206,7 +206,11 @@ async function main() {
   if (imageDetails) {
     const postText = `The West Wing - ${parseInt(imageDetails.season, 10)}x${parseInt(imageDetails.episodeNumber, 10)} - ${imageDetails.episodeTitle} - Frame ${parseInt(imageDetails.frameNumber, 10)} of ${imageDetails.totalFramesInEpisode}`;
     const subtitleText = getSubtitleFromManifest(process.env.MANIFEST_JSON, nextImage.imageName);
+    console.error(`Manifest path: ${process.env.MANIFEST_JSON}`);
+    console.error(`Image name: ${nextImage.imageName}`);
+    console.error(`Subtitle found: ${subtitleText}`);
     let altText = AltTextFromDetails(imageDetails, subtitleText);
+    console.error(`Alt text: ${altText}`);
     const maxAltLength = 2000;
     if (altText.length > maxAltLength) altText = altText.slice(0, maxAltLength - 1) + '…';
     await postImage({
