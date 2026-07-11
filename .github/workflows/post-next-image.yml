@@ -6,6 +6,7 @@ env:
   IMAGE_DIR: imagequeue
   IMAGE_PATH_IN_REPO: imagequeue
   IMAGE_BRANCH: main
+  MANIFEST_JSON: manifest.json
 
 jobs:
   post-next-image:
@@ -24,6 +25,7 @@ jobs:
             lib/
             bin/
             .github/scripts/
+            manifest.json
 
       - name: compare cache with live directory
         id: manifest
@@ -183,6 +185,7 @@ jobs:
           BSKY_IDENTIFIER: ${{ secrets.BSKY_IDENTIFIER }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
           LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
+          MANIFEST_JSON: ${{ env.MANIFEST_JSON }}
         shell: bash
         run: |
           echo "starting with LAST_IMAGE_NAME: $LAST_IMAGE_NAME"
