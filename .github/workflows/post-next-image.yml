@@ -40,7 +40,7 @@ jobs:
           set -euo pipefail
           echo "Querying GitHub for files in ${IMAGE_PATH} at ref ${REF}..."
 
-          branch_data=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
+          branch_data=$(curl -sSf --retry 5 --retry-delay 3 --retry-connrefused -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/branches/${REF}")
           tree_sha=$(printf '%s' "$branch_data" | jq -r '.commit.sha')
 
@@ -50,7 +50,7 @@ jobs:
             exit 0
           fi
 
-          resp=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
+          resp=$(curl -sSf --retry 5 --retry-delay 3 --retry-connrefused -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/git/trees/${tree_sha}?recursive=1")
 
           truncated=$(printf '%s' "$resp" | jq -r '.truncated')
@@ -101,7 +101,7 @@ jobs:
           set -euo pipefail
           echo "Cache miss - downloading image list from GitHub Trees API..."
 
-          branch_data=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
+          branch_data=$(curl -sSf --retry 5 --retry-delay 3 --retry-connrefused -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/branches/${REF}")
           tree_sha=$(printf '%s' "$branch_data" | jq -r '.commit.sha')
 
@@ -110,7 +110,7 @@ jobs:
             exit 0
           fi
 
-          resp=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
+          resp=$(curl -sSf --retry 5 --retry-delay 3 --retry-connrefused -H "Authorization: token ${GH_TOKEN}" \
             "${GITHUB_API}/repos/${REPO}/git/trees/${tree_sha}?recursive=1")
 
           truncated=$(printf '%s' "$resp" | jq -r '.truncated')
@@ -140,7 +140,7 @@ jobs:
 
             encoded_path=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$filepath")
 
-            curl -sSfL \
+            curl -sSfL --retry 5 --retry-delay 3 --retry-connrefused \
               -H "Authorization: token ${GH_TOKEN}" \
               -o "$outpath" \
               "https://raw.githubusercontent.com/${REPO}/${REF}/${encoded_path}"
