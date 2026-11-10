@@ -7,6 +7,7 @@ env:
   IMAGE_PATH_IN_REPO: imagequeue
   IMAGE_BRANCH: main
   MANIFEST_JSON: manifest.json
+  FETCH_COUNT: 10
 
 jobs:
   post-next-image:
@@ -27,68 +28,7 @@ jobs:
             .github/scripts/
             manifest.json
 
-      - name: compare cache with live directory
-        id: manifest
-        env:
-          GITHUB_API: https://api.github.com
-          REPO: ${{ github.repository }}
-          REF: ${{ env.IMAGE_BRANCH }}
-          IMAGE_PATH: ${{ env.IMAGE_PATH_IN_REPO }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Querying GitHub for files in ${IMAGE_PATH} at ref ${REF}..."
-
-          branch_data=$(curl -sSf --retry 5 --retry-delay 3 --retry-connrefused -H "Authorization: token ${GH_TOKEN}" \
-            "${GITHUB_API}/repos/${REPO}/branches/${REF}")
-          tree_sha=$(printf '%s' "$branch_data" | jq -r '.commit.sha')
-
-          if [ -z "$tree_sha" ] || [ "$tree_sha" = "null" ]; then
-            echo "noresp=true" >> $GITHUB_OUTPUT
-            echo "MANIFEST_KEY=disk-empty" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          resp=$(curl -sSf --retry 5 --retry-delay 3 --retry-connrefused -H "Authorization: token ${GH_TOKEN}" \
-            "${GITHUB_API}/repos/${REPO}/git/trees/${tree_sha}?recursive=1")
-
-          truncated=$(printf '%s' "$resp" | jq -r '.truncated')
-          if [ "$truncated" = "true" ]; then
-            echo "::warning::Git tree response was truncated — some files may be missing!"
-          fi
-
-          manifest=$(printf '%s' "$resp" \
-            | jq -r --arg prefix "${IMAGE_PATH}/" \
-              '.tree[] | select(.type=="blob") | select(.path | startswith($prefix)) | "\(.path):\(.sha)"' \
-            | sort | tr '\n' '|')
-
-          if [ -z "$manifest" ]; then
-            echo "MANIFEST_KEY=empty" >> $GITHUB_OUTPUT
-            echo "no_files=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          manifest_hash=$(printf '%s' "$manifest" | sha1sum | awk '{print $1}')
-          key="imagequeue-${{ runner.os }}-${manifest_hash}"
-          echo "MANIFEST=$manifest" >> $GITHUB_OUTPUT
-          echo "MANIFEST_KEY=$key" >> $GITHUB_OUTPUT
-          echo "manifest_length=$(printf '%s' "$manifest" | wc -c)" >> $GITHUB_OUTPUT
-
-      - name: restore imagequeue cache
-        uses: actions/cache@v4
-        id: cache
-        with:
-          path: ${{ env.IMAGE_DIR }}
-          key: ${{ steps.manifest.outputs.MANIFEST_KEY }}
-          restore-keys: |
-            imagequeue-${{ runner.os }}-
-
-      - name: ensure image directory exists
-        run: mkdir -p "${{ env.IMAGE_DIR }}"
-
-      - name: populate imagequeue (on cache miss)
-        if: steps.cache.outputs.cache-hit != 'true'
+      - name: fetch upcoming frames only
         env:
           GITHUB_API: https://api.github.com
           REPO: ${{ github.repository }}
@@ -96,60 +36,64 @@ jobs:
           IMAGE_PATH: ${{ env.IMAGE_PATH_IN_REPO }}
           IMAGE_DIR: ${{ env.IMAGE_DIR }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
+          FETCH_COUNT: ${{ env.FETCH_COUNT }}
         shell: bash
         run: |
           set -euo pipefail
-          echo "Cache miss - downloading image list from GitHub Trees API..."
+          mkdir -p "${IMAGE_DIR}"
+          echo "Listing ${IMAGE_PATH} at ref ${REF} (last posted: '${LAST_IMAGE_NAME}')"
 
-          branch_data=$(curl -sSf --retry 5 --retry-delay 3 --retry-connrefused -H "Authorization: token ${GH_TOKEN}" \
-            "${GITHUB_API}/repos/${REPO}/branches/${REF}")
-          tree_sha=$(printf '%s' "$branch_data" | jq -r '.commit.sha')
-
-          if [ -z "$tree_sha" ] || [ "$tree_sha" = "null" ]; then
-            echo "No tree SHA found, exiting."
-            exit 0
-          fi
-
-          resp=$(curl -sSf --retry 5 --retry-delay 3 --retry-connrefused -H "Authorization: token ${GH_TOKEN}" \
-            "${GITHUB_API}/repos/${REPO}/git/trees/${tree_sha}?recursive=1")
+          resp=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
+            "${GITHUB_API}/repos/${REPO}/git/trees/${REF}?recursive=1")
 
           truncated=$(printf '%s' "$resp" | jq -r '.truncated')
           if [ "$truncated" = "true" ]; then
-            echo "::warning::Git tree response was truncated — some files may be missing!"
+            echo "::error::Git tree response was truncated, refusing to continue with an incomplete file list."
+            exit 1
           fi
 
-          files=$(printf '%s' "$resp" \
-            | jq -r --arg prefix "${IMAGE_PATH}/" \
-              '.tree[] | select(.type=="blob") | select(.path | startswith($prefix)) | .path')
+          listed=$(printf '%s' "$resp" | jq -r --arg prefix "${IMAGE_PATH}/" \
+            '[.tree[] | select(.type=="blob") | select(.path | startswith($prefix))] | length')
+          echo "Tree lists ${listed} file(s) under ${IMAGE_PATH}/"
 
-          if [ -z "$files" ]; then
-            echo "No files found in ${IMAGE_PATH} at ${REF}."
-            exit 0
+          selection=$(printf '%s' "$resp" | jq -r \
+            --arg prefix "${IMAGE_PATH}/" \
+            --arg last "${LAST_IMAGE_NAME}" \
+            --argjson n "${FETCH_COUNT}" '
+            def sortkey: capture("^TWW_(?<s>\\d+)x(?<e>\\d+)_.*__(?<f>\\d+)\\.[A-Za-z]+$")
+                         | [(.s|tonumber), (.e|tonumber), (.f|tonumber)];
+            [ .tree[] | select(.type=="blob") | select(.path | startswith($prefix)) | .path
+              | select((split("/")|last) | test("^TWW_\\d+x\\d+_.*__\\d+\\.[A-Za-z]+$")) ]
+            | map({p: ., k: (split("/")|last|sortkey)})
+            | sort_by(.k)
+            | . as $all
+            | ($last | if test("^TWW_") then sortkey else null end) as $lk
+            | (if $lk == null then $all else ($all | map(select(.k > $lk))) end) as $after
+            | (if ($after|length) > 0 then $after else $all end)
+            | .[:$n][]
+            | [.p, (.p | split("/") | map(@uri) | join("/"))] | @tsv')
+
+          if [ -z "$selection" ]; then
+            echo "::error::No frames found under ${IMAGE_PATH} at ${REF}."
+            exit 1
           fi
 
-          echo "$files" | while IFS= read -r filepath; do
+          printf '%s\n' "$selection" | while IFS=$'\t' read -r filepath encoded_path; do
             name=$(basename "$filepath")
-            outpath="${IMAGE_DIR}/${name}"
-
-            if [ -f "$outpath" ]; then
-              echo "Skipping existing $outpath"
-              continue
-            fi
-
-            echo "Downloading $name ..."
-
-            encoded_path=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$filepath")
-
-            curl -sSfL --retry 5 --retry-delay 3 --retry-connrefused \
+            echo "Downloading $name"
+            curl -sSfL \
               -H "Authorization: token ${GH_TOKEN}" \
-              -o "$outpath" \
+              -o "${IMAGE_DIR}/${name}" \
               "https://raw.githubusercontent.com/${REPO}/${REF}/${encoded_path}"
           done
 
+          echo "Fetched $(ls -1 "${IMAGE_DIR}" | wc -l) frame(s)."
+
       - name: Use Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v3
         with:
-          node-version: 24
+          node-version: 20
           cache: 'yarn'
           cache-dependency-path: '**/yarn.lock'
 
