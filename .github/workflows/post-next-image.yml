@@ -14,10 +14,12 @@ jobs:
     name: Post Next Image
     runs-on: ubuntu-latest
     steps:
-      - name: checkout (sparse)
+      - name: checkout (sparse, no image data)
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.IMAGE_BRANCH }}
           fetch-depth: 1
+          filter: blob:none
           sparse-checkout: |
             package.json
             yarn.lock
@@ -30,40 +32,25 @@ jobs:
 
       - name: fetch upcoming frames only
         env:
-          GITHUB_API: https://api.github.com
-          REPO: ${{ github.repository }}
-          REF: ${{ env.IMAGE_BRANCH }}
           IMAGE_PATH: ${{ env.IMAGE_PATH_IN_REPO }}
           IMAGE_DIR: ${{ env.IMAGE_DIR }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LAST_IMAGE_NAME: ${{ vars.LAST_IMAGE_NAME }}
           FETCH_COUNT: ${{ env.FETCH_COUNT }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "${IMAGE_DIR}"
-          echo "Listing ${IMAGE_PATH} at ref ${REF} (last posted: '${LAST_IMAGE_NAME}')"
+          echo "Listing ${IMAGE_PATH}/ (last posted: '${LAST_IMAGE_NAME}')"
 
-          resp=$(curl -sSf -H "Authorization: token ${GH_TOKEN}" \
-            "${GITHUB_API}/repos/${REPO}/git/trees/${REF}?recursive=1")
+          git -c core.quotePath=false ls-tree --name-only HEAD "${IMAGE_PATH}/" > /tmp/names.txt
+          echo "Tree lists $(wc -l < /tmp/names.txt) file(s) under ${IMAGE_PATH}/"
 
-          truncated=$(printf '%s' "$resp" | jq -r '.truncated')
-          if [ "$truncated" = "true" ]; then
-            echo "::error::Git tree response was truncated, refusing to continue with an incomplete file list."
-            exit 1
-          fi
-
-          listed=$(printf '%s' "$resp" | jq -r --arg prefix "${IMAGE_PATH}/" \
-            '[.tree[] | select(.type=="blob") | select(.path | startswith($prefix))] | length')
-          echo "Tree lists ${listed} file(s) under ${IMAGE_PATH}/"
-
-          selection=$(printf '%s' "$resp" | jq -r \
-            --arg prefix "${IMAGE_PATH}/" \
+          jq -R -r -s \
             --arg last "${LAST_IMAGE_NAME}" \
             --argjson n "${FETCH_COUNT}" '
             def sortkey: capture("^TWW_(?<s>\\d+)x(?<e>\\d+)_.*__(?<f>\\d+)\\.[A-Za-z]+$")
                          | [(.s|tonumber), (.e|tonumber), (.f|tonumber)];
-            [ .tree[] | select(.type=="blob") | select(.path | startswith($prefix)) | .path
+            [ split("\n")[] | select(length>0)
               | select((split("/")|last) | test("^TWW_\\d+x\\d+_.*__\\d+\\.[A-Za-z]+$")) ]
             | map({p: ., k: (split("/")|last|sortkey)})
             | sort_by(.k)
@@ -71,22 +58,18 @@ jobs:
             | ($last | if test("^TWW_") then sortkey else null end) as $lk
             | (if $lk == null then $all else ($all | map(select(.k > $lk))) end) as $after
             | (if ($after|length) > 0 then $after else $all end)
-            | .[:$n][]
-            | [.p, (.p | split("/") | map(@uri) | join("/"))] | @tsv')
+            | .[:$n][] | .p' /tmp/names.txt > /tmp/selection.txt
 
-          if [ -z "$selection" ]; then
-            echo "::error::No frames found under ${IMAGE_PATH} at ${REF}."
+          if [ ! -s /tmp/selection.txt ]; then
+            echo "::error::No frames found under ${IMAGE_PATH}."
             exit 1
           fi
 
-          printf '%s\n' "$selection" | while IFS=$'\t' read -r filepath encoded_path; do
+          while IFS= read -r filepath; do
             name=$(basename "$filepath")
             echo "Downloading $name"
-            curl -sSfL \
-              -H "Authorization: token ${GH_TOKEN}" \
-              -o "${IMAGE_DIR}/${name}" \
-              "https://raw.githubusercontent.com/${REPO}/${REF}/${encoded_path}"
-          done
+            git cat-file blob "HEAD:${filepath}" > "${IMAGE_DIR}/${name}"
+          done < /tmp/selection.txt
 
           echo "Fetched $(ls -1 "${IMAGE_DIR}" | wc -l) frame(s)."
 
